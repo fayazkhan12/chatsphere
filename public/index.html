@@ -1,0 +1,13 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <title>Redirecting...</title>
+  <script>
+    // Send user to chat if logged in, otherwise to login page
+    const token = localStorage.getItem('token');
+    window.location.href = token ? '/chat.html' : '/login.html';
+  </script>
+</head>
+<body></body>
+</html>
