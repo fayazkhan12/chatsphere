@@ -92,10 +92,42 @@ function renderChatList() {
       <div class="chat-item-meta">
         ${conv.lastMessage ? formatTime(conv.lastMessage.createdAt) : ''}
       </div>
+      <button class="chat-item-delete" title="Delete chat"><i class="bi bi-trash"></i></button>
     `;
+    div.querySelector('.chat-item-delete').addEventListener('click', (e) => {
+      e.stopPropagation(); // don't trigger openConversation when clicking delete
+      deleteConversation(conv);
+    });
     div.addEventListener('click', () => openConversation(conv));
     list.appendChild(div);
   });
+}
+
+// ---------- delete a conversation ----------
+async function deleteConversation(conv) {
+  const confirmed = confirm(`Delete chat with "${conversationTitle(conv)}"? This only removes it from your list.`);
+  if (!confirmed) return;
+
+  try {
+    const res = await fetch(`${API_BASE}/conversations/${conv._id}`, {
+      method: 'DELETE',
+      headers: authHeaders(),
+    });
+    if (!res.ok) throw new Error('Delete failed');
+
+    // If the deleted chat was open, go back to the empty state
+    if (activeConversation && activeConversation._id === conv._id) {
+      activeConversation = null;
+      document.getElementById('chatWindow').classList.add('d-none');
+      document.getElementById('emptyState').classList.remove('d-none');
+      document.getElementById('app').classList.remove('chat-open');
+    }
+
+    await loadConversations();
+  } catch (err) {
+    alert('Could not delete chat. Try again.');
+    console.error(err);
+  }
 }
 
 // ---------- user search ----------
@@ -222,22 +254,104 @@ function renderMessage(msg) {
   }
 
   let mediaHtml = '';
-  if (msg.messageType === 'image' && msg.fileUrl) {
+  if (msg.isDeleted) {
+    mediaHtml = '';
+  } else if (msg.messageType === 'image' && msg.fileUrl) {
     mediaHtml = `<a href="${msg.fileUrl}" target="_blank"><img src="${msg.fileUrl}" class="msg-image" /></a>`;
   } else if (msg.messageType === 'file' && msg.fileUrl) {
     mediaHtml = `<a href="${msg.fileUrl}" target="_blank" class="msg-file"><i class="bi bi-file-earmark-arrow-down"></i> Download file</a>`;
   }
 
+  const deleteMenuHtml = msg.isDeleted
+    ? ''
+    : `
+    <div class="msg-menu">
+      <button class="msg-menu-btn" title="Delete"><i class="bi bi-three-dots-vertical"></i></button>
+      <div class="msg-menu-dropdown d-none">
+        <button class="msg-menu-item" data-action="me">Delete for me</button>
+        ${mine ? '<button class="msg-menu-item text-danger" data-action="everyone">Delete for everyone</button>' : ''}
+      </div>
+    </div>
+  `;
+
   row.innerHTML = `
     <div class="bubble">
       ${activeConversation.type === 'group' && !mine ? `<div class="sender-name">${msg.sender.name}</div>` : ''}
+      ${deleteMenuHtml}
       ${mediaHtml}
-      <div class="msg-text"></div>
+      <div class="msg-text ${msg.isDeleted ? 'msg-deleted-text' : ''}"></div>
       <div class="msg-meta">${formatTime(msg.createdAt)} ${tick}</div>
     </div>
   `;
   if (msg.text) row.querySelector('.msg-text').textContent = msg.text; // textContent avoids XSS
   container.appendChild(row);
+
+  if (!msg.isDeleted) {
+    const menuBtn = row.querySelector('.msg-menu-btn');
+    const dropdown = row.querySelector('.msg-menu-dropdown');
+    menuBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      document.querySelectorAll('.msg-menu-dropdown').forEach((d) => {
+        if (d !== dropdown) d.classList.add('d-none');
+      });
+      dropdown.classList.toggle('d-none');
+    });
+    dropdown.querySelectorAll('.msg-menu-item').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        dropdown.classList.add('d-none');
+        handleDeleteMessage(msg, btn.dataset.action === 'everyone');
+      });
+    });
+  }
+}
+
+// close any open message menu when clicking elsewhere on the page
+document.addEventListener('click', () => {
+  document.querySelectorAll('.msg-menu-dropdown').forEach((d) => d.classList.add('d-none'));
+});
+
+// ---------- delete a message ----------
+async function handleDeleteMessage(msg, forEveryone) {
+  const confirmed = confirm(
+    forEveryone ? 'Delete this message for everyone?' : 'Delete this message for you?'
+  );
+  if (!confirmed) return;
+
+  try {
+    const res = await fetch(`${API_BASE}/messages/${msg._id}`, {
+      method: 'DELETE',
+      headers: authHeaders(),
+      body: JSON.stringify({ forEveryone }),
+    });
+    if (!res.ok) throw new Error('Delete failed');
+
+    if (forEveryone) {
+      markMessageDeletedInDOM(msg._id);
+    } else {
+      // "delete for me" -> just remove it from my own view
+      const row = document.querySelector(`.msg-row[data-id="${msg._id}"]`);
+      row?.remove();
+    }
+  } catch (err) {
+    alert('Could not delete message. Try again.');
+    console.error(err);
+  }
+}
+
+function markMessageDeletedInDOM(messageId) {
+  const row = document.querySelector(`.msg-row[data-id="${messageId}"]`);
+  if (!row) return;
+  const bubble = row.querySelector('.bubble');
+  if (!bubble) return;
+  bubble.querySelector('.msg-image')?.parentElement.remove();
+  bubble.querySelector('.msg-file')?.remove();
+  bubble.querySelector('.msg-menu')?.remove();
+  const textEl = bubble.querySelector('.msg-text');
+  if (textEl) {
+    textEl.textContent = 'This message was deleted';
+    textEl.classList.add('msg-deleted-text');
+  }
 }
 
 // ---------- file upload ----------
@@ -314,8 +428,55 @@ messageText.addEventListener('input', () => {
   }, 1500);
 });
 
+// ---------- toast notifications ----------
+function showToast(conv, msg) {
+  const container = document.getElementById('toastContainer');
+
+  const toast = document.createElement('div');
+  toast.className = 'chat-toast';
+
+  const previewText =
+    msg.messageType === 'image' ? '📷 Photo' : msg.messageType === 'file' ? '📎 File' : msg.text;
+
+  toast.innerHTML = `
+    <img src="${conversationAvatar(conv)}" />
+    <div class="toast-body">
+      <div class="toast-name">${conversationTitle(conv)}</div>
+      <div class="toast-text">${previewText}</div>
+    </div>
+  `;
+
+  toast.addEventListener('click', () => {
+    openConversation(conv);
+    toast.remove();
+  });
+
+  container.appendChild(toast);
+  setTimeout(() => toast.remove(), 4000); // auto-dismiss after 4s
+}
+
+function notifyNewMessage(conv, msg) {
+  if (msg.sender._id === me._id) return; // never notify for my own messages
+
+  document.getElementById('notifSound')?.play().catch(() => {});
+
+  // In-app toast: only if this conversation isn't the one currently open
+  if (!activeConversation || activeConversation._id !== conv._id) {
+    showToast(conv, msg);
+  }
+
+  // Native OS/browser notification: useful when the tab is in the background
+  if (document.hidden && window.Notification && Notification.permission === 'granted') {
+    const body =
+      msg.messageType === 'image' ? '📷 Sent a photo' : msg.messageType === 'file' ? '📎 Sent a file' : msg.text;
+    new Notification(conversationTitle(conv), { body, icon: conversationAvatar(conv) });
+  }
+}
+
 // ---------- socket listeners ----------
 socket.on('receive_message', (msg) => {
+  const conv = conversationsCache.find((c) => c._id === msg.conversationId);
+
   if (activeConversation && msg.conversationId === activeConversation._id) {
     renderMessage(msg);
     const container = document.getElementById('messagesContainer');
@@ -327,6 +488,8 @@ socket.on('receive_message', (msg) => {
         messageIds: [msg._id],
       });
     }
+  } else if (conv) {
+    notifyNewMessage(conv, msg);
   }
   loadConversations();
 });
@@ -334,6 +497,10 @@ socket.on('receive_message', (msg) => {
 socket.on('message_delivered', ({ messageId }) => {
   const row = document.querySelector(`.msg-row[data-id="${messageId}"] .tick`);
   if (row) row.textContent = '✓✓';
+});
+
+socket.on('message_deleted', ({ messageId }) => {
+  markMessageDeletedInDOM(messageId);
 });
 
 socket.on('message_read', ({ messageIds }) => {

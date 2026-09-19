@@ -14,7 +14,10 @@ const getMessages = async (req, res, next) => {
       return res.status(403).json({ message: 'Not a participant of this conversation' });
     }
 
-    const messages = await Message.find({ conversationId })
+        const messages = await Message.find({
+      conversationId,
+      deletedFor: { $ne: req.user._id }, // hide messages this user deleted "for me"
+    })
       .populate('sender', 'name username profilePicture')
       .populate('replyTo')
       .sort({ createdAt: -1 })
@@ -79,22 +82,46 @@ const editMessage = async (req, res, next) => {
 };
 
 // @route  DELETE /api/messages/:id
+// body: { forEveryone: boolean }
+// forEveryone=true -> only the sender can do this; replaces the text for ALL participants
+//                      and broadcasts the change in real time.
+// forEveryone=false (default) -> "delete for me"; only hides it from this user's own view.
 const deleteMessage = async (req, res, next) => {
   try {
+    const { forEveryone } = req.body;
     const message = await Message.findById(req.params.id);
     if (!message) return res.status(404).json({ message: 'Message not found' });
-    if (String(message.sender) !== String(req.user._id)) {
-      return res.status(403).json({ message: 'You can only delete your own messages' });
+
+    if (forEveryone) {
+      if (String(message.sender) !== String(req.user._id)) {
+        return res.status(403).json({ message: 'You can only delete your own messages for everyone' });
+      }
+
+      message.isDeleted = true;
+      message.text = 'This message was deleted';
+      message.fileUrl = undefined;
+      await message.save();
+
+      // Notify everyone else in the conversation in real time
+      const io = req.app.get('io');
+      io?.to(String(message.conversationId)).emit('message_deleted', {
+        messageId: message._id,
+        conversationId: message.conversationId,
+        forEveryone: true,
+      });
+
+      return res.json({ message: 'Message deleted for everyone', messageId: message._id });
     }
 
-    message.isDeleted = true;
-    message.text = 'This message was deleted';
-    await message.save();
+    // delete for me only
+    if (!message.deletedFor.some((id) => String(id) === String(req.user._id))) {
+      message.deletedFor.push(req.user._id);
+      await message.save();
+    }
 
-    res.json({ message: 'Message deleted' });
+    res.json({ message: 'Message deleted for you', messageId: message._id });
   } catch (error) {
     next(error);
   }
 };
-
 module.exports = { getMessages, sendMessage, editMessage, deleteMessage };

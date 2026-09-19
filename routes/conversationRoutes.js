@@ -5,6 +5,7 @@ const {
   addMember,
   removeMember,
   leaveGroup,
+  deleteConversation,
 } = require('../controllers/conversationController');
 const { protect } = require('../middleware/authMiddleware');
 
@@ -17,5 +18,6 @@ router.post('/', createConversation);
 router.put('/:id/add-member', addMember);
 router.put('/:id/remove-member', removeMember);
 router.put('/:id/leave', leaveGroup);
+router.delete('/:id', deleteConversation);
 
 module.exports = router;

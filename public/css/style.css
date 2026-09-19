@@ -263,3 +263,69 @@ body {
   text-decoration: underline;
   margin-bottom: 4px;
 }
+
+.chat-item {
+  position: relative;
+}
+.chat-item-delete {
+  background: none;
+  border: none;
+  color: var(--muted, #667781);
+  opacity: 0;
+  transition: opacity 0.15s;
+  padding: 6px;
+  cursor: pointer;
+  border-radius: 6px;
+  flex-shrink: 0;
+}
+.chat-item:hover .chat-item-delete {
+  opacity: 1;
+}
+.chat-item-delete:hover {
+  color: #e53935;
+  background: rgba(229, 57, 53, 0.1);
+}
+
+.msg-menu {
+  position: absolute;
+  top: 2px;
+  right: 4px;
+}
+.msg-menu-btn {
+  background: none;
+  border: none;
+  color: var(--muted, #667781);
+  opacity: 0;
+  padding: 2px 4px;
+  cursor: pointer;
+  border-radius: 4px;
+}
+.bubble:hover .msg-menu-btn { opacity: 0.7; }
+.msg-menu-btn:hover { opacity: 1; background: rgba(0,0,0,0.08); }
+.bubble { position: relative; padding-right: 24px; }
+.msg-menu-dropdown {
+  position: absolute;
+  top: 24px;
+  right: 0;
+  background: var(--bubble-theirs, #fff);
+  border: 1px solid rgba(0,0,0,0.1);
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+  z-index: 50;
+  min-width: 160px;
+  overflow: hidden;
+}
+.msg-menu-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 8px 12px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 0.85rem;
+  color: inherit;
+}
+.msg-menu-item:hover { background: rgba(0,0,0,0.06); }
+.msg-menu-item.text-danger { color: #e53935 !important; }
+.msg-deleted-text { font-style: italic; opacity: 0.6; }

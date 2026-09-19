@@ -22,3 +22,5 @@ const conversationSchema = new mongoose.Schema(
 conversationSchema.index({ participants: 1 });
 
 module.exports = mongoose.model('Conversation', conversationSchema);
+    // Users who have "deleted" this chat from their own view (WhatsApp-style delete for me)
+    deletedFor: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }]

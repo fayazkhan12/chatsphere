@@ -25,8 +25,9 @@ const messageSchema = new mongoose.Schema(
     ],
     status: { type: String, enum: ['sent', 'delivered', 'read'], default: 'sent' },
     readBy: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
-    isEdited: { type: Boolean, default: false },
-    isDeleted: { type: Boolean, default: false },
+        isEdited: { type: Boolean, default: false },
+    isDeleted: { type: Boolean, default: false }, // true = deleted for everyone
+    deletedFor: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }], // per-user "delete for me"
   },
   { timestamps: true }
 );

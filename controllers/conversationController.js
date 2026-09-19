@@ -5,7 +5,10 @@ const User = require('../models/User');
 // Returns all conversations the logged-in user is part of, newest activity first
 const getConversations = async (req, res, next) => {
   try {
-    const conversations = await Conversation.find({ participants: req.user._id })
+    const conversations = await Conversation.find({
+      participants: req.user._id,
+      deletedFor: { $ne: req.user._id }, // hide chats this user has deleted
+    })
       .populate('participants', '-password')
       .populate('groupAdmin', '-password')
       .populate({
@@ -143,10 +146,36 @@ const leaveGroup = async (req, res, next) => {
   }
 };
 
+// @route  DELETE /api/conversations/:id
+// "Delete for me" — hides the chat from this user's list only; the other
+// participant(s) still see it and its messages, exactly like WhatsApp.
+const deleteConversation = async (req, res, next) => {
+  try {
+    const conversation = await Conversation.findById(req.params.id);
+
+    if (!conversation) {
+      return res.status(404).json({ message: 'Conversation not found' });
+    }
+    if (!conversation.participants.some((p) => String(p) === String(req.user._id))) {
+      return res.status(403).json({ message: 'Not a participant of this conversation' });
+    }
+
+    if (!conversation.deletedFor.some((id) => String(id) === String(req.user._id))) {
+      conversation.deletedFor.push(req.user._id);
+      await conversation.save();
+    }
+
+    res.json({ message: 'Conversation deleted', conversationId: conversation._id });
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   getConversations,
   createConversation,
   addMember,
   removeMember,
   leaveGroup,
-};
+  deleteConversation,
+}

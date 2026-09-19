@@ -65,6 +65,7 @@ const io = new Server(server, {
   cors: { origin: process.env.CLIENT_URL || '*', credentials: true },
 });
 initSocket(io);
+app.set('io', io); // lets REST controllers (e.g. delete message) emit real-time events
 
 // 8. Start server
 const PORT = process.env.PORT || 5000;
