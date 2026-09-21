@@ -65,7 +65,7 @@ function initSocket(io) {
     // --- send a message ---
     socket.on('send_message', async (data, callback) => {
       try {
-        const { conversationId, text, messageType, replyTo, fileUrl } = data;
+              const { conversationId, text, messageType, replyTo, fileUrl, location } = data;
 
         const conversation = await Conversation.findById(conversationId);
         if (!conversation || !conversation.participants.some((p) => String(p) === userId)) {
@@ -78,6 +78,7 @@ function initSocket(io) {
           text,
           messageType: messageType || 'text',
           fileUrl: fileUrl || undefined,
+          location: location || undefined,
           replyTo: replyTo || null,
           status: 'sent',
         });

@@ -1,8 +1,10 @@
 const Conversation = require('../models/Conversation');
+const Message = require('../models/Message');
 const User = require('../models/User');
 
 // @route  GET /api/conversations
-// Returns all conversations the logged-in user is part of, newest activity first
+// Returns all conversations the logged-in user is part of, newest activity first,
+// each annotated with an "unreadCount" of messages sent by others not yet read.
 const getConversations = async (req, res, next) => {
   try {
     const conversations = await Conversation.find({
@@ -17,7 +19,32 @@ const getConversations = async (req, res, next) => {
       })
       .sort({ updatedAt: -1 });
 
-    res.json(conversations);
+    const conversationIds = conversations.map((c) => c._id);
+
+    const unreadAgg = await Message.aggregate([
+      {
+        $match: {
+          conversationId: { $in: conversationIds },
+          sender: { $ne: req.user._id },
+          readBy: { $ne: req.user._id },
+          deletedFor: { $ne: req.user._id },
+        },
+      },
+      { $group: { _id: '$conversationId', count: { $sum: 1 } } },
+    ]);
+
+    const unreadMap = {};
+    unreadAgg.forEach((u) => {
+      unreadMap[String(u._id)] = u.count;
+    });
+
+    const result = conversations.map((c) => {
+      const obj = c.toObject();
+      obj.unreadCount = unreadMap[String(c._id)] || 0;
+      return obj;
+    });
+
+    res.json(result);
   } catch (error) {
     next(error);
   }

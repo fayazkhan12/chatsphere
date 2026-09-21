@@ -10,11 +10,18 @@ const messageSchema = new mongoose.Schema(
     },
     sender: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
     text: { type: String, trim: true },
-    messageType: {
+        messageType: {
       type: String,
-      enum: ['text', 'image', 'file', 'system'],
+      enum: ['text', 'image', 'file', 'system', 'location'],
       default: 'text',
     },
+    fileUrl: { type: String }, // used only when messageType is image/file
+    location: {
+      lat: { type: Number },
+      lng: { type: Number },
+    }, // used only when messageType is 'location'
+
+    
     fileUrl: { type: String }, // used only when messageType is image/file
     replyTo: { type: mongoose.Schema.Types.ObjectId, ref: 'Message', default: null },
     reactions: [

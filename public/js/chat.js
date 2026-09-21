@@ -79,11 +79,18 @@ function renderChatList() {
     div.dataset.id = conv._id;
     if (activeConversation && activeConversation._id === conv._id) div.classList.add('active');
 
-    const lastMsgText = conv.lastMessage
-      ? (conv.lastMessage.sender?._id === me._id ? 'You: ' : '') + (conv.lastMessage.text || '')
+        const lastMsgText = conv.lastMessage
+      ? (conv.lastMessage.sender?._id === me._id ? 'You: ' : '') +
+        (conv.lastMessage.messageType === 'location'
+          ? '📍 Location'
+          : conv.lastMessage.messageType === 'image'
+          ? '📷 Photo'
+          : conv.lastMessage.messageType === 'file'
+          ? '📎 File'
+          : conv.lastMessage.text || '')
       : 'No messages yet';
 
-    div.innerHTML = `
+       div.innerHTML = `
       <img class="avatar" src="${conversationAvatar(conv)}" />
       <div class="chat-item-info">
         <div class="chat-item-name">${conversationTitle(conv)}</div>
@@ -91,9 +98,11 @@ function renderChatList() {
       </div>
       <div class="chat-item-meta">
         ${conv.lastMessage ? formatTime(conv.lastMessage.createdAt) : ''}
+        ${conv.unreadCount > 0 ? `<span class="unread-badge">${conv.unreadCount > 99 ? '99+' : conv.unreadCount}</span>` : ''}
       </div>
       <button class="chat-item-delete" title="Delete chat"><i class="bi bi-trash"></i></button>
     `;
+    
     div.querySelector('.chat-item-delete').addEventListener('click', (e) => {
       e.stopPropagation(); // don't trigger openConversation when clicking delete
       deleteConversation(conv);
@@ -212,8 +221,13 @@ async function openConversation(conv) {
       : `Last seen ${timeAgo(other.lastSeen)}`;
   }
 
-  socket.emit('join_room', conv._id);
+    socket.emit('join_room', conv._id);
   await loadMessages(conv._id);
+
+  // messages just got marked read -> reflect that immediately in the sidebar
+  conv.unreadCount = 0;
+  renderChatList();
+
 }
 
 async function loadMessages(conversationId) {
@@ -253,15 +267,24 @@ function renderMessage(msg) {
         : '<span class="tick">✓</span>';
   }
 
-  let mediaHtml = '';
+    let mediaHtml = '';
   if (msg.isDeleted) {
     mediaHtml = '';
   } else if (msg.messageType === 'image' && msg.fileUrl) {
     mediaHtml = `<a href="${msg.fileUrl}" target="_blank"><img src="${msg.fileUrl}" class="msg-image" /></a>`;
   } else if (msg.messageType === 'file' && msg.fileUrl) {
     mediaHtml = `<a href="${msg.fileUrl}" target="_blank" class="msg-file"><i class="bi bi-file-earmark-arrow-down"></i> Download file</a>`;
+  } else if (msg.messageType === 'location' && msg.location) {
+    const { lat, lng } = msg.location;
+    const mapImg = `https://staticmap.openstreetmap.de/staticmap.php?center=${lat},${lng}&zoom=15&size=280x160&markers=${lat},${lng},red-pushpin`;
+    const mapLink = `https://www.google.com/maps?q=${lat},${lng}`;
+    mediaHtml = `
+      <a href="${mapLink}" target="_blank" class="msg-location">
+        <img src="${mapImg}" class="msg-location-img" alt="Shared location" />
+        <div class="msg-location-label"><i class="bi bi-geo-alt-fill"></i> Location shared &middot; Open in Maps</div>
+      </a>
+    `;
   }
-
   const deleteMenuHtml = msg.isDeleted
     ? ''
     : `
@@ -395,6 +418,50 @@ fileInput.addEventListener('change', async () => {
     attachBtn.innerHTML = '<i class="bi bi-paperclip"></i>';
     fileInput.value = '';
   }
+});
+
+// ---------- share location ----------
+const locationBtn = document.getElementById('locationBtn');
+
+locationBtn.addEventListener('click', () => {
+  if (!activeConversation) return;
+
+  if (!navigator.geolocation) {
+    alert('Location sharing is not supported in this browser.');
+    return;
+  }
+
+  locationBtn.disabled = true;
+  locationBtn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
+
+  navigator.geolocation.getCurrentPosition(
+    (position) => {
+      const { latitude, longitude } = position.coords;
+
+      socket.emit(
+        'send_message',
+        {
+          conversationId: activeConversation._id,
+          text: '',
+          messageType: 'location',
+          location: { lat: latitude, lng: longitude },
+        },
+        (ack) => {
+          if (ack?.error) alert(ack.error);
+        }
+      );
+
+      locationBtn.disabled = false;
+      locationBtn.innerHTML = '<i class="bi bi-geo-alt-fill"></i>';
+    },
+    (err) => {
+      alert('Could not get your location. Please allow location access and try again.');
+      console.error(err);
+      locationBtn.disabled = false;
+      locationBtn.innerHTML = '<i class="bi bi-geo-alt-fill"></i>';
+    },
+    { enableHighAccuracy: true, timeout: 10000 }
+  );
 });
 
 // ---------- sending messages ----------

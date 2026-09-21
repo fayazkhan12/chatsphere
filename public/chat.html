@@ -59,11 +59,12 @@
         <div class="typing-indicator d-none" id="typingIndicator"></div>
 
         <form class="message-input" id="messageForm">
-          <input type="file" id="fileInput" accept="image/*,.pdf,.docx,.mp3,.mp4" hidden />
-          <button type="button" id="attachBtn" title="Attach file"><i class="bi bi-paperclip"></i></button>
-          <input type="text" id="messageText" placeholder="Type a message..." autocomplete="off" />
-          <button type="submit"><i class="bi bi-send-fill"></i></button>
-        </form>
+  <input type="file" id="fileInput" accept="image/*,.pdf,.docx,.mp3,.mp4" hidden />
+  <button type="button" id="attachBtn" title="Attach file"><i class="bi bi-paperclip"></i></button>
+  <button type="button" id="locationBtn" title="Share location"><i class="bi bi-geo-alt-fill"></i></button>
+  <input type="text" id="messageText" placeholder="Type a message..." autocomplete="off" />
+  <button type="submit"><i class="bi bi-send-fill"></i></button>
+</form>
       </div>
     </main>
   </div>
@@ -89,7 +90,7 @@
     </div>
   </div>
 
-  <audio id="notifSound" src="https://cdn.jsdelivr.net/gh/naptha/notification-sounds@master/notify.mp3"></audio>
+  <audio id="notifSound" src="https://cdn.jsdelivr.net/gh/naptha/notification-sounds@master/notify.mp3" preload="auto"></audio>
 
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
   <script src="/socket.io/socket.io.js"></script>

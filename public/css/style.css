@@ -329,3 +329,47 @@ body {
 .msg-menu-item:hover { background: rgba(0,0,0,0.06); }
 .msg-menu-item.text-danger { color: #e53935 !important; }
 .msg-deleted-text { font-style: italic; opacity: 0.6; }
+
+.chat-item-meta {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+}
+.unread-badge {
+  background: #25d366;
+  color: white;
+  font-size: 0.72rem;
+  font-weight: 700;
+  min-width: 20px;
+  height: 20px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 6px;
+}
+
+.msg-location {
+  display: block;
+  text-decoration: none;
+  color: inherit;
+  margin-bottom: 4px;
+  border-radius: 8px;
+  overflow: hidden;
+}
+.msg-location-img {
+  width: 100%;
+  max-width: 280px;
+  display: block;
+  border-radius: 8px 8px 0 0;
+}
+.msg-location-label {
+  background: rgba(0,0,0,0.06);
+  padding: 6px 10px;
+  font-size: 0.78rem;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  border-radius: 0 0 8px 8px;
+}
