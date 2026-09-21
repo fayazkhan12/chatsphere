@@ -541,6 +541,13 @@ function notifyNewMessage(conv, msg) {
 }
 
 // ---------- socket listeners ----------
+//
+socket.on('connect', () => {
+  // covers reconnects after bfcache/visibility recovery (see socket.js) —
+  // pulls in anything that may have been missed while disconnected
+  loadConversations();
+});
+
 socket.on('receive_message', (msg) => {
   const conv = conversationsCache.find((c) => c._id === msg.conversationId);
 

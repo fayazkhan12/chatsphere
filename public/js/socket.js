@@ -17,3 +17,22 @@ socket.on('connect_error', (err) => {
     window.location.href = '/login.html';
   }
 });
+
+// Chrome's "back/forward cache" (bfcache) silently freezes the page (and its
+// WebSocket) when the tab goes inactive, e.g. switching apps/tabs on mobile.
+// When the page is restored, the socket does NOT reconnect automatically —
+// this forces a fresh connection so messages arrive in real time again
+// without the user needing to manually refresh.
+window.addEventListener('pageshow', (event) => {
+  if (event.persisted && !socket.connected) {
+    socket.connect();
+  }
+});
+
+// Belt-and-braces: also reconnect whenever the tab becomes visible again
+// and the socket happens to be disconnected for any other reason.
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && !socket.connected) {
+    socket.connect();
+  }
+});
