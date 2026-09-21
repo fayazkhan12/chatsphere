@@ -62,6 +62,16 @@ document.getElementById('logoutBtn').addEventListener('click', async () => {
 
 loadConversations();
 
+// Safety net: some hosting setups (e.g. free-tier proxies) can silently drop
+// the WebSocket connection after a couple of minutes even while the tab is
+// active. This background poll guarantees new messages/unread counts show
+// up within ~15s even if that happens, without needing a manual refresh.
+setInterval(() => {
+  loadConversations();
+}, 5000);
+
+// ---------- load & render conversation list ----------
+
 // ---------- load & render conversation list ----------
 async function loadConversations() {
   const res = await fetch(`${API_BASE}/conversations`, { headers: authHeaders() });
