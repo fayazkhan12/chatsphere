@@ -455,10 +455,9 @@ body {
   background: #202c33;
 }
 
-/* When it's an audio-only call, localVideo has no video track to show,
-   so it just collapses into a slim rounded pill instead of a black box. */
-.call-screen #localVideo:not([srcObject]) {
-  opacity: 0;
+/* Audio-only call: no camera feed to show, so hide the self-view box */
+.call-screen.audio-only #localVideo {
+  display: none;
 }
 
 .call-status-overlay {

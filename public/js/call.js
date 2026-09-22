@@ -182,6 +182,7 @@ async function startCall(callType) {
 
   localVideo.srcObject = localStream;
   toggleCameraBtn.style.display = callType === 'video' ? 'flex' : 'none';
+  callScreen.classList.toggle('audio-only', callType === 'audio');
 
   showCallScreen(conversationTitle(activeConversation), conversationAvatar(activeConversation), 'Calling...');
 
@@ -233,6 +234,7 @@ acceptCallBtn.addEventListener('click', async () => {
 
   localVideo.srcObject = localStream;
   toggleCameraBtn.style.display = callType === 'video' ? 'flex' : 'none';
+  callScreen.classList.toggle('audio-only', callType === 'audio');
 
   showCallScreen(fromName, fromAvatar, 'Connecting...');
 
