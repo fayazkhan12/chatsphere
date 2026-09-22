@@ -238,7 +238,28 @@ async function openConversation(conv) {
   // messages just got marked read -> reflect that immediately in the sidebar
   conv.unreadCount = 0;
   renderChatList();
+
+  // Push a history entry so the browser's back button closes this
+  // conversation (returns to the chat list) instead of leaving the app
+  // entirely and landing back on the login page.
+  history.pushState({ chatOpen: true }, '', location.pathname);
 }
+
+function closeActiveConversation() {
+  activeConversation = null;
+  document.getElementById('chatWindow').classList.add('d-none');
+  document.getElementById('emptyState').classList.remove('d-none');
+  document.getElementById('app').classList.remove('chat-open');
+  renderChatList();
+}
+
+// Back button (or swipe-back on mobile) while a conversation is open should
+// just close it, not navigate away from the app.
+window.addEventListener('popstate', () => {
+  if (activeConversation) {
+    closeActiveConversation();
+  }
+});
 
 async function loadMessages(conversationId) {
   const res = await fetch(`${API_BASE}/messages/${conversationId}`, { headers: authHeaders() });
