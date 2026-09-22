@@ -65,12 +65,10 @@ loadConversations();
 // Safety net: some hosting setups (e.g. free-tier proxies) can silently drop
 // the WebSocket connection after a couple of minutes even while the tab is
 // active. This background poll guarantees new messages/unread counts show
-// up within ~15s even if that happens, without needing a manual refresh.
+// up within ~5s even if that happens, without needing a manual refresh.
 setInterval(() => {
   loadConversations();
 }, 5000);
-
-// ---------- load & render conversation list ----------
 
 // ---------- load & render conversation list ----------
 async function loadConversations() {
@@ -89,7 +87,7 @@ function renderChatList() {
     div.dataset.id = conv._id;
     if (activeConversation && activeConversation._id === conv._id) div.classList.add('active');
 
-        const lastMsgText = conv.lastMessage
+    const lastMsgText = conv.lastMessage
       ? (conv.lastMessage.sender?._id === me._id ? 'You: ' : '') +
         (conv.lastMessage.messageType === 'location'
           ? '📍 Location'
@@ -100,7 +98,7 @@ function renderChatList() {
           : conv.lastMessage.text || '')
       : 'No messages yet';
 
-       div.innerHTML = `
+    div.innerHTML = `
       <img class="avatar" src="${conversationAvatar(conv)}" />
       <div class="chat-item-info">
         <div class="chat-item-name">${conversationTitle(conv)}</div>
@@ -112,7 +110,6 @@ function renderChatList() {
       </div>
       <button class="chat-item-delete" title="Delete chat"><i class="bi bi-trash"></i></button>
     `;
-    
     div.querySelector('.chat-item-delete').addEventListener('click', (e) => {
       e.stopPropagation(); // don't trigger openConversation when clicking delete
       deleteConversation(conv);
@@ -224,20 +221,23 @@ async function openConversation(conv) {
   if (conv.type === 'group') {
     document.getElementById('chatSubtitle').textContent =
       `${conv.participants.length} members`;
+    document.getElementById('voiceCallBtn')?.classList.add('d-none');
+    document.getElementById('videoCallBtn')?.classList.add('d-none');
   } else {
     const other = otherParticipant(conv);
     document.getElementById('chatSubtitle').textContent = other.isOnline
       ? 'Online'
       : `Last seen ${timeAgo(other.lastSeen)}`;
+    document.getElementById('voiceCallBtn')?.classList.remove('d-none');
+    document.getElementById('videoCallBtn')?.classList.remove('d-none');
   }
 
-    socket.emit('join_room', conv._id);
+  socket.emit('join_room', conv._id);
   await loadMessages(conv._id);
 
   // messages just got marked read -> reflect that immediately in the sidebar
   conv.unreadCount = 0;
   renderChatList();
-
 }
 
 async function loadMessages(conversationId) {
@@ -277,7 +277,7 @@ function renderMessage(msg) {
         : '<span class="tick">✓</span>';
   }
 
-    let mediaHtml = '';
+  let mediaHtml = '';
   if (msg.isDeleted) {
     mediaHtml = '';
   } else if (msg.messageType === 'image' && msg.fileUrl) {
@@ -295,6 +295,7 @@ function renderMessage(msg) {
       </a>
     `;
   }
+
   const deleteMenuHtml = msg.isDeleted
     ? ''
     : `
@@ -513,7 +514,7 @@ function showToast(conv, msg) {
   toast.className = 'chat-toast';
 
   const previewText =
-    msg.messageType === 'image' ? '📷 Photo' : msg.messageType === 'file' ? '📎 File' : msg.text;
+    msg.messageType === 'image' ? '📷 Photo' : msg.messageType === 'file' ? '📎 File' : msg.messageType === 'location' ? '📍 Location' : msg.text;
 
   toast.innerHTML = `
     <img src="${conversationAvatar(conv)}" />
@@ -545,13 +546,12 @@ function notifyNewMessage(conv, msg) {
   // Native OS/browser notification: useful when the tab is in the background
   if (document.hidden && window.Notification && Notification.permission === 'granted') {
     const body =
-      msg.messageType === 'image' ? '📷 Sent a photo' : msg.messageType === 'file' ? '📎 Sent a file' : msg.text;
+      msg.messageType === 'image' ? '📷 Sent a photo' : msg.messageType === 'file' ? '📎 Sent a file' : msg.messageType === 'location' ? '📍 Shared a location' : msg.text;
     new Notification(conversationTitle(conv), { body, icon: conversationAvatar(conv) });
   }
 }
 
 // ---------- socket listeners ----------
-//
 socket.on('connect', () => {
   // covers reconnects after bfcache/visibility recovery (see socket.js) —
   // pulls in anything that may have been missed while disconnected

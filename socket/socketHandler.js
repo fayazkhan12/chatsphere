@@ -159,8 +159,37 @@ function initSocket(io) {
       socket.to(conversationId).emit('stop_typing', { conversationId, userId });
     });
 
-    // --- join a personal room too, so we can target notifications directly at a user ---
+       // --- join a personal room too, so we can target notifications directly at a user ---
     socket.join(userId);
+
+    // --- voice/video call signaling (WebRTC) ---
+    // The actual audio/video travels directly between the two browsers (peer-to-peer);
+    // the server here only relays the small "handshake" messages needed to set that up.
+    socket.on('call_user', ({ to, offer, callType }) => {
+      io.to(to).emit('incoming_call', {
+        from: userId,
+        fromName: socket.user.name,
+        fromAvatar: socket.user.profilePicture,
+        offer,
+        callType, // 'audio' | 'video'
+      });
+    });
+
+    socket.on('answer_call', ({ to, answer }) => {
+      io.to(to).emit('call_answered', { answer });
+    });
+
+    socket.on('ice_candidate', ({ to, candidate }) => {
+      io.to(to).emit('ice_candidate', { candidate, from: userId });
+    });
+
+    socket.on('reject_call', ({ to }) => {
+      io.to(to).emit('call_rejected');
+    });
+
+    socket.on('end_call', ({ to }) => {
+      io.to(to).emit('call_ended');
+    });
 
     // --- disconnect ---
     socket.on('disconnect', async () => {
