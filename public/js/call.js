@@ -20,6 +20,20 @@ let currentCallType = null; // 'audio' | 'video'
 let isMicMuted = false;
 let isCameraOff = false;
 
+// FIX: ICE candidates that arrive from the other side before OUR
+// peerConnection exists (e.g. the callee hasn't clicked "Accept" yet)
+// used to be silently dropped, which is why calls would randomly fail
+// to connect or only work one-way. We now buffer them here and flush
+// the queue right after the peerConnection is created.
+let pendingCandidates = [];
+
+// A short grace period before we treat "disconnected" as a real hangup.
+// WebRTC reports "disconnected" for brief network blips too (e.g. wifi
+// hiccup, tab backgrounded); ending the call immediately on that state
+// was causing calls to drop even when the connection recovered on its own.
+let disconnectTimer = null;
+const DISCONNECT_GRACE_MS = 6000;
+
 // ---------- element references ----------
 const incomingCallModal = document.getElementById('incomingCallModal');
 const incomingCallAvatar = document.getElementById('incomingCallAvatar');
@@ -76,6 +90,27 @@ async function getLocalStream(withVideo) {
   return navigator.mediaDevices.getUserMedia({ audio: true, video: withVideo });
 }
 
+// FIX: flush any ICE candidates that arrived before the peerConnection existed.
+async function flushPendingCandidates() {
+  if (!peerConnection || pendingCandidates.length === 0) return;
+  const queued = pendingCandidates;
+  pendingCandidates = [];
+  for (const candidate of queued) {
+    try {
+      await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+    } catch (err) {
+      console.error('Error adding queued ICE candidate:', err);
+    }
+  }
+}
+
+function clearDisconnectTimer() {
+  if (disconnectTimer) {
+    clearTimeout(disconnectTimer);
+    disconnectTimer = null;
+  }
+}
+
 function createPeerConnection(remoteUserId) {
   const pc = new RTCPeerConnection(ICE_SERVERS);
 
@@ -91,8 +126,30 @@ function createPeerConnection(remoteUserId) {
     callStatusText.textContent = 'Connected';
   };
 
+  // FIX: don't hang up instantly on a transient "disconnected" state.
+  // Only "failed" / "closed" are treated as a real, unrecoverable hangup.
+  // "disconnected" gets a short grace period to self-recover before we end the call.
   pc.onconnectionstatechange = () => {
-    if (['disconnected', 'failed', 'closed'].includes(pc.connectionState)) {
+    const state = pc.connectionState;
+
+    if (state === 'connected') {
+      clearDisconnectTimer();
+      return;
+    }
+
+    if (state === 'disconnected') {
+      clearDisconnectTimer();
+      disconnectTimer = setTimeout(() => {
+        // Still not recovered after the grace period -> actually end it.
+        if (peerConnection && peerConnection.connectionState !== 'connected') {
+          endCall(false);
+        }
+      }, DISCONNECT_GRACE_MS);
+      return;
+    }
+
+    if (state === 'failed' || state === 'closed') {
+      clearDisconnectTimer();
       endCall(false);
     }
   };
@@ -113,6 +170,7 @@ async function startCall(callType) {
 
   currentCallPeerId = other._id;
   currentCallType = callType;
+  pendingCandidates = [];
 
   try {
     localStream = await getLocalStream(callType === 'video');
@@ -178,10 +236,14 @@ acceptCallBtn.addEventListener('click', async () => {
 
   showCallScreen(fromName, fromAvatar, 'Connecting...');
 
+  // FIX: create the peerConnection FIRST, then immediately flush any ICE
+  // candidates that arrived while we were still ringing (peerConnection was null).
   peerConnection = createPeerConnection(currentCallPeerId);
   localStream.getTracks().forEach((track) => peerConnection.addTrack(track, localStream));
 
   await peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
+  await flushPendingCandidates();
+
   const answer = await peerConnection.createAnswer();
   await peerConnection.setLocalDescription(answer);
 
@@ -195,6 +257,7 @@ rejectCallBtn.addEventListener('click', () => {
   }
   stopRingtone();
   pendingIncoming = null;
+  pendingCandidates = [];
   incomingCallModal.classList.add('d-none');
 });
 
@@ -202,12 +265,21 @@ rejectCallBtn.addEventListener('click', () => {
 socket.on('call_answered', async ({ answer }) => {
   if (!peerConnection) return;
   await peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
+  await flushPendingCandidates(); // FIX: flush here too, in case candidates queued while waiting for the answer
   callStatusText.textContent = 'Connecting...';
 });
 
 // ---------- ICE candidates ----------
-socket.on('ice_candidate', async ({ candidate }) => {
-  if (!peerConnection || !candidate) return;
+// FIX: if our peerConnection isn't ready yet, queue the candidate instead
+// of throwing it away. It gets applied as soon as the connection exists.
+socket.on('ice_candidate', async ({ candidate, from }) => {
+  if (!candidate) return;
+
+  if (!peerConnection) {
+    pendingCandidates.push(candidate);
+    return;
+  }
+
   try {
     await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
   } catch (err) {
@@ -237,6 +309,7 @@ endCallBtn.addEventListener('click', () => endCall(true));
 
 function resetCallState() {
   stopRingtone();
+  clearDisconnectTimer();
 
   if (peerConnection) {
     peerConnection.close();
@@ -250,6 +323,7 @@ function resetCallState() {
   currentCallPeerId = null;
   currentCallType = null;
   pendingIncoming = null;
+  pendingCandidates = [];
   isMicMuted = false;
   isCameraOff = false;
   toggleMuteBtn.innerHTML = '<i class="bi bi-mic-fill"></i>';
