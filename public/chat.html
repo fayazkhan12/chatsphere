@@ -109,7 +109,8 @@
 
   <!-- Active call screen -->
   <div id="callScreen" class="call-screen d-none">
-    <video id="remoteVideo" autoplay playsinline></video>
+    <!-- remote participant tiles get added/removed here dynamically -->
+    <div id="callGrid" class="call-grid"></div>
     <video id="localVideo" autoplay playsinline muted></video>
 
     <div id="callStatusOverlay" class="call-status-overlay">
@@ -118,10 +119,26 @@
       <div id="callStatusText" class="text-muted"></div>
     </div>
 
+    <div id="callParticipantCount" class="call-participant-count d-none">
+      <i class="bi bi-people-fill"></i> <span id="callParticipantCountText"></span>
+    </div>
+
     <div class="call-controls">
       <button id="toggleMuteBtn" class="call-btn call-btn-secondary"><i class="bi bi-mic-fill"></i></button>
       <button id="toggleCameraBtn" class="call-btn call-btn-secondary"><i class="bi bi-camera-video-fill"></i></button>
+      <button id="addToCallBtn" class="call-btn call-btn-secondary" title="Add to call"><i class="bi bi-person-plus-fill"></i></button>
       <button id="endCallBtn" class="call-btn call-btn-reject"><i class="bi bi-telephone-x-fill"></i></button>
+    </div>
+  </div>
+
+  <!-- Add-participant picker, opened from the call screen -->
+  <div id="addToCallModal" class="call-invite-overlay d-none">
+    <div class="call-invite-box">
+      <div class="call-invite-header">
+        <span>Add to call</span>
+        <button id="closeAddToCallBtn" class="icon-btn"><i class="bi bi-x-lg"></i></button>
+      </div>
+      <div id="addToCallList" class="call-invite-list"></div>
     </div>
   </div>
 

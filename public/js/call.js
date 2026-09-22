@@ -1,9 +1,13 @@
 // ---------------------------------------------------------------
 // Voice/Video calling (WebRTC), signaled through the existing socket.
-// The actual audio/video streams travel directly between the two
-// browsers (peer-to-peer); the server only relays small "handshake"
-// messages (call_user, answer_call, ice_candidate, etc. - see
-// socket/socketHandler.js) needed to set that connection up.
+// Supports 1-to-1 AND group calls using a full "mesh": every participant
+// opens a direct peer-to-peer connection to every other participant.
+// The server only relays small handshake messages (see join_call,
+// call_offer, call_answer, call_ice etc. in socket/socketHandler.js) -
+// actual audio/video never passes through the server.
+//
+// callId is always the conversation's _id: everyone who calls into the
+// same conversation joins the same call room.
 // ---------------------------------------------------------------
 
 const ICE_SERVERS = {
@@ -13,26 +17,23 @@ const ICE_SERVERS = {
   ],
 };
 
-let peerConnection = null;
+let callId = null;
+let callType = null; // 'audio' | 'video'
+let callConversationId = null;
+let isCallActive = false; // true once we've joined the call room (ringing-out or connected)
 let localStream = null;
-let currentCallPeerId = null;
-let currentCallType = null; // 'audio' | 'video'
 let isMicMuted = false;
 let isCameraOff = false;
 
-// FIX: ICE candidates that arrive from the other side before OUR
-// peerConnection exists (e.g. the callee hasn't clicked "Accept" yet)
-// used to be silently dropped, which is why calls would randomly fail
-// to connect or only work one-way. We now buffer them here and flush
-// the queue right after the peerConnection is created.
-let pendingCandidates = [];
+// One entry per remote participant currently in the call.
+// userId -> { pc, name, avatar, videoEl, connected }
+const peers = new Map();
 
-// A short grace period before we treat "disconnected" as a real hangup.
-// WebRTC reports "disconnected" for brief network blips too (e.g. wifi
-// hiccup, tab backgrounded); ending the call immediately on that state
-// was causing calls to drop even when the connection recovered on its own.
-let disconnectTimer = null;
-const DISCONNECT_GRACE_MS = 6000;
+// ICE candidates that arrive before we've created a peer entry for that
+// sender yet (e.g. arrives before their offer). Held here until then.
+const earlyCandidates = new Map(); // userId -> [candidate, ...]
+
+let pendingIncoming = null; // { callId, from, fromName, fromAvatar, callType, conversationId, isGroup }
 
 // ---------- element references ----------
 const incomingCallModal = document.getElementById('incomingCallModal');
@@ -43,21 +44,26 @@ const rejectCallBtn = document.getElementById('rejectCallBtn');
 const acceptCallBtn = document.getElementById('acceptCallBtn');
 
 const callScreen = document.getElementById('callScreen');
-const remoteVideo = document.getElementById('remoteVideo');
+const callGrid = document.getElementById('callGrid');
 const localVideo = document.getElementById('localVideo');
 const callStatusOverlay = document.getElementById('callStatusOverlay');
 const callPeerAvatar = document.getElementById('callPeerAvatar');
 const callPeerName = document.getElementById('callPeerName');
 const callStatusText = document.getElementById('callStatusText');
+const callParticipantCount = document.getElementById('callParticipantCount');
+const callParticipantCountText = document.getElementById('callParticipantCountText');
 const toggleMuteBtn = document.getElementById('toggleMuteBtn');
 const toggleCameraBtn = document.getElementById('toggleCameraBtn');
 const endCallBtn = document.getElementById('endCallBtn');
+const addToCallBtn = document.getElementById('addToCallBtn');
+
+const addToCallModal = document.getElementById('addToCallModal');
+const addToCallList = document.getElementById('addToCallList');
+const closeAddToCallBtn = document.getElementById('closeAddToCallBtn');
 
 const voiceCallBtn = document.getElementById('voiceCallBtn');
 const videoCallBtn = document.getElementById('videoCallBtn');
 const ringtone = document.getElementById('ringtoneSound');
-
-let pendingIncoming = null; // { from, fromName, fromAvatar, offer, callType }
 
 // ---------- helpers ----------
 function playRingtone() {
@@ -69,11 +75,9 @@ function stopRingtone() {
   ringtone.currentTime = 0;
 }
 
-function showCallScreen(peerName, peerAvatar, statusText) {
+function showCallScreen(statusText) {
   incomingCallModal.classList.add('d-none');
   callScreen.classList.remove('d-none');
-  callPeerName.textContent = peerName;
-  callPeerAvatar.src = peerAvatar || '';
   callStatusText.textContent = statusText;
   callStatusOverlay.classList.remove('d-none');
 }
@@ -81,136 +85,166 @@ function showCallScreen(peerName, peerAvatar, statusText) {
 function hideCallUI() {
   incomingCallModal.classList.add('d-none');
   callScreen.classList.add('d-none');
+  addToCallModal.classList.add('d-none');
   callStatusOverlay.classList.remove('d-none');
-  remoteVideo.srcObject = null;
   localVideo.srcObject = null;
+  callGrid.innerHTML = '';
 }
 
 async function getLocalStream(withVideo) {
   return navigator.mediaDevices.getUserMedia({ audio: true, video: withVideo });
 }
 
-// FIX: flush any ICE candidates that arrived before the peerConnection existed.
-async function flushPendingCandidates() {
-  if (!peerConnection || pendingCandidates.length === 0) return;
-  const queued = pendingCandidates;
-  pendingCandidates = [];
-  for (const candidate of queued) {
-    try {
-      await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
-    } catch (err) {
-      console.error('Error adding queued ICE candidate:', err);
-    }
+function updateParticipantCount() {
+  const n = peers.size + 1; // + myself
+  if (n > 2) {
+    callParticipantCount.classList.remove('d-none');
+    callParticipantCountText.textContent = `${n} in call`;
+  } else {
+    callParticipantCount.classList.add('d-none');
+  }
+  callGrid.classList.toggle('single-tile', peers.size === 1);
+}
+
+// Shows the "connecting..." avatar overlay only while nobody has connected yet
+function refreshStatusOverlay() {
+  const anyoneConnected = [...peers.values()].some((p) => p.connected);
+  if (anyoneConnected) {
+    callStatusOverlay.classList.add('d-none');
+  } else {
+    callStatusOverlay.classList.remove('d-none');
   }
 }
 
-function clearDisconnectTimer() {
-  if (disconnectTimer) {
-    clearTimeout(disconnectTimer);
-    disconnectTimer = null;
-  }
+// ---------- per-peer video tile ----------
+function createTile(userId, name) {
+  const tile = document.createElement('div');
+  tile.className = 'call-tile';
+  tile.id = `call-tile-${userId}`;
+
+  const video = document.createElement('video');
+  video.autoplay = true;
+  video.playsInline = true;
+
+  const label = document.createElement('div');
+  label.className = 'call-tile-label';
+  label.textContent = name || 'Guest';
+
+  tile.appendChild(video);
+  tile.appendChild(label);
+  callGrid.appendChild(tile);
+
+  return video;
 }
 
-function createPeerConnection(remoteUserId) {
+function removeTile(userId) {
+  document.getElementById(`call-tile-${userId}`)?.remove();
+}
+
+// ---------- peer connection lifecycle ----------
+function createPeerForUser(userId, name, avatar) {
   const pc = new RTCPeerConnection(ICE_SERVERS);
+  const videoEl = createTile(userId, name);
+
+  const peer = { pc, name, avatar, videoEl, connected: false };
+  peers.set(userId, peer);
+
+  localStream.getTracks().forEach((track) => pc.addTrack(track, localStream));
 
   pc.onicecandidate = (event) => {
     if (event.candidate) {
-      socket.emit('ice_candidate', { to: remoteUserId, candidate: event.candidate });
+      socket.emit('call_ice', { callId, to: userId, candidate: event.candidate });
     }
   };
 
   pc.ontrack = (event) => {
-    remoteVideo.srcObject = event.streams[0];
-    callStatusOverlay.classList.add('d-none'); // peer connected -> hide "connecting" avatar overlay
+    videoEl.srcObject = event.streams[0];
+    peer.connected = true;
+    refreshStatusOverlay();
     callStatusText.textContent = 'Connected';
   };
 
-  // FIX: don't hang up instantly on a transient "disconnected" state.
-  // Only "failed" / "closed" are treated as a real, unrecoverable hangup.
-  // "disconnected" gets a short grace period to self-recover before we end the call.
   pc.onconnectionstatechange = () => {
-    const state = pc.connectionState;
-
-    if (state === 'connected') {
-      clearDisconnectTimer();
-      return;
-    }
-
-    if (state === 'disconnected') {
-      clearDisconnectTimer();
-      disconnectTimer = setTimeout(() => {
-        // Still not recovered after the grace period -> actually end it.
-        if (peerConnection && peerConnection.connectionState !== 'connected') {
-          endCall(false);
-        }
-      }, DISCONNECT_GRACE_MS);
-      return;
-    }
-
-    if (state === 'failed' || state === 'closed') {
-      clearDisconnectTimer();
-      endCall(false);
+    if (['failed', 'closed', 'disconnected'].includes(pc.connectionState)) {
+      removePeer(userId);
     }
   };
 
-  return pc;
+  // Apply any ICE candidates that arrived before this peer connection existed
+  const queued = earlyCandidates.get(userId);
+  if (queued) {
+    earlyCandidates.delete(userId);
+    queued.forEach((candidate) => {
+      pc.addIceCandidate(new RTCIceCandidate(candidate)).catch((err) =>
+        console.error('Error adding queued ICE candidate:', err)
+      );
+    });
+  }
+
+  updateParticipantCount();
+  return peer;
 }
 
-// ---------- outgoing call ----------
-async function startCall(callType) {
-  if (!activeConversation || activeConversation.type !== 'one-to-one') return;
-  const other = otherParticipant(activeConversation);
-  if (!other) return;
+function removePeer(userId) {
+  const peer = peers.get(userId);
+  if (!peer) return;
+  peer.pc.close();
+  peers.delete(userId);
+  earlyCandidates.delete(userId);
+  removeTile(userId);
+  updateParticipantCount();
+  refreshStatusOverlay();
+}
 
-  if (currentCallPeerId) {
+// ---------- starting / joining a call ----------
+async function startCall(type) {
+  if (!activeConversation) return;
+
+  if (isCallActive) {
     alert('You are already in a call.');
     return;
   }
 
-  currentCallPeerId = other._id;
-  currentCallType = callType;
-  pendingCandidates = [];
+  callId = activeConversation._id;
+  callType = type;
+  callConversationId = activeConversation._id;
 
   try {
-    localStream = await getLocalStream(callType === 'video');
+    localStream = await getLocalStream(type === 'video');
   } catch (err) {
     alert('Could not access camera/microphone. Please allow permission and try again.');
-    currentCallPeerId = null;
+    callId = null;
     return;
   }
 
   localVideo.srcObject = localStream;
-  toggleCameraBtn.style.display = callType === 'video' ? 'flex' : 'none';
-  callScreen.classList.toggle('audio-only', callType === 'audio');
+  toggleCameraBtn.style.display = type === 'video' ? 'flex' : 'none';
+  callScreen.classList.toggle('audio-only', type === 'audio');
 
-  showCallScreen(conversationTitle(activeConversation), conversationAvatar(activeConversation), 'Calling...');
+  callPeerAvatar.src = conversationAvatar(activeConversation) || '';
+  callPeerName.textContent = conversationTitle(activeConversation);
+  showCallScreen('Calling...');
+  isCallActive = true;
 
-  peerConnection = createPeerConnection(currentCallPeerId);
-  localStream.getTracks().forEach((track) => peerConnection.addTrack(track, localStream));
-
-  const offer = await peerConnection.createOffer();
-  await peerConnection.setLocalDescription(offer);
-
-  socket.emit('call_user', { to: currentCallPeerId, offer, callType });
+  socket.emit('join_call', { callId, callType: type, conversationId: callConversationId });
 }
 
 voiceCallBtn?.addEventListener('click', () => startCall('audio'));
 videoCallBtn?.addEventListener('click', () => startCall('video'));
 
-// ---------- incoming call ----------
-socket.on('incoming_call', ({ from, fromName, fromAvatar, offer, callType }) => {
-  if (currentCallPeerId) {
-    // already on/starting another call -> auto-decline
-    socket.emit('reject_call', { to: from });
+// ---------- incoming call (ringing) ----------
+socket.on('incoming_call', ({ callId: incomingId, from, fromName, fromAvatar, callType: incomingType, conversationId, isGroup }) => {
+  if (isCallActive) {
+    // already on a call -> auto-decline this new one
+    socket.emit('reject_call', { callId: incomingId, to: from });
     return;
   }
 
-  pendingIncoming = { from, fromName, fromAvatar, offer, callType };
+  pendingIncoming = { callId: incomingId, from, fromName, fromAvatar, callType: incomingType, conversationId, isGroup };
 
   incomingCallAvatar.src = fromAvatar || '';
   incomingCallName.textContent = fromName || 'Unknown';
-  incomingCallType.textContent = `Incoming ${callType === 'video' ? 'video' : 'voice'} call`;
+  incomingCallType.textContent = `Incoming ${incomingType === 'video' ? 'video' : 'voice'}${isGroup ? ' group' : ''} call`;
   incomingCallModal.classList.remove('d-none');
   playRingtone();
 });
@@ -219,119 +253,218 @@ acceptCallBtn.addEventListener('click', async () => {
   if (!pendingIncoming) return;
   stopRingtone();
 
-  const { from, fromName, fromAvatar, offer, callType } = pendingIncoming;
-  currentCallPeerId = from;
-  currentCallType = callType;
+  const { callId: incomingId, fromName, fromAvatar, callType: incomingType, conversationId } = pendingIncoming;
 
   try {
-    localStream = await getLocalStream(callType === 'video');
+    localStream = await getLocalStream(incomingType === 'video');
   } catch (err) {
     alert('Could not access camera/microphone. Please allow permission and try again.');
-    socket.emit('reject_call', { to: from });
-    resetCallState();
+    socket.emit('reject_call', { callId: incomingId, to: pendingIncoming.from });
+    pendingIncoming = null;
+    incomingCallModal.classList.add('d-none');
     return;
   }
 
+  callId = incomingId;
+  callType = incomingType;
+  callConversationId = conversationId;
+  isCallActive = true;
+
   localVideo.srcObject = localStream;
-  toggleCameraBtn.style.display = callType === 'video' ? 'flex' : 'none';
-  callScreen.classList.toggle('audio-only', callType === 'audio');
+  toggleCameraBtn.style.display = incomingType === 'video' ? 'flex' : 'none';
+  callScreen.classList.toggle('audio-only', incomingType === 'audio');
 
-  showCallScreen(fromName, fromAvatar, 'Connecting...');
+  callPeerAvatar.src = fromAvatar || '';
+  callPeerName.textContent = fromName || 'Unknown';
+  showCallScreen('Connecting...');
 
-  // FIX: create the peerConnection FIRST, then immediately flush any ICE
-  // candidates that arrived while we were still ringing (peerConnection was null).
-  peerConnection = createPeerConnection(currentCallPeerId);
-  localStream.getTracks().forEach((track) => peerConnection.addTrack(track, localStream));
-
-  await peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
-  await flushPendingCandidates();
-
-  const answer = await peerConnection.createAnswer();
-  await peerConnection.setLocalDescription(answer);
-
-  socket.emit('answer_call', { to: currentCallPeerId, answer });
   pendingIncoming = null;
+  socket.emit('join_call', { callId, callType: incomingType, conversationId });
 });
 
 rejectCallBtn.addEventListener('click', () => {
   if (pendingIncoming) {
-    socket.emit('reject_call', { to: pendingIncoming.from });
+    socket.emit('reject_call', { callId: pendingIncoming.callId, to: pendingIncoming.from });
   }
   stopRingtone();
   pendingIncoming = null;
-  pendingCandidates = [];
   incomingCallModal.classList.add('d-none');
 });
 
-// ---------- call answered (caller side) ----------
-socket.on('call_answered', async ({ answer }) => {
-  if (!peerConnection) return;
-  await peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
-  await flushPendingCandidates(); // FIX: flush here too, in case candidates queued while waiting for the answer
-  callStatusText.textContent = 'Connecting...';
+// ---------- room membership events ----------
+
+// Sent only to me, right after I join: who's already in the room.
+// Per the "existing members offer to the newcomer" rule, I do NOT
+// initiate connections here - I just wait for their offers.
+socket.on('call_joined', ({ callId: id, participants }) => {
+  if (id !== callId) return;
+  if (participants.length > 0) {
+    callStatusText.textContent = 'Connecting...';
+  }
+  updateParticipantCount();
 });
 
-// ---------- ICE candidates ----------
-// FIX: if our peerConnection isn't ready yet, queue the candidate instead
-// of throwing it away. It gets applied as soon as the connection exists.
-socket.on('ice_candidate', async ({ candidate, from }) => {
-  if (!candidate) return;
+// A new peer joined a room I'm already in -> I initiate the offer to them.
+socket.on('call_peer_joined', async ({ callId: id, userId, name, avatar }) => {
+  if (id !== callId || peers.has(userId)) return;
 
-  if (!peerConnection) {
-    pendingCandidates.push(candidate);
+  const peer = createPeerForUser(userId, name, avatar);
+  try {
+    const offer = await peer.pc.createOffer();
+    await peer.pc.setLocalDescription(offer);
+    socket.emit('call_offer', { callId, to: userId, offer });
+  } catch (err) {
+    console.error('Error creating offer for new peer:', err);
+  }
+});
+
+socket.on('call_offer', async ({ callId: id, from, fromName, fromAvatar, offer }) => {
+  if (id !== callId) return;
+
+  let peer = peers.get(from);
+  if (!peer) peer = createPeerForUser(from, fromName, fromAvatar);
+
+  try {
+    await peer.pc.setRemoteDescription(new RTCSessionDescription(offer));
+    const answer = await peer.pc.createAnswer();
+    await peer.pc.setLocalDescription(answer);
+    socket.emit('call_answer', { callId, to: from, answer });
+  } catch (err) {
+    console.error('Error handling call offer:', err);
+  }
+});
+
+socket.on('call_answer', async ({ callId: id, from, answer }) => {
+  if (id !== callId) return;
+  const peer = peers.get(from);
+  if (!peer) return;
+  try {
+    await peer.pc.setRemoteDescription(new RTCSessionDescription(answer));
+  } catch (err) {
+    console.error('Error applying call answer:', err);
+  }
+});
+
+socket.on('call_ice', async ({ callId: id, from, candidate }) => {
+  if (id !== callId || !candidate) return;
+
+  const peer = peers.get(from);
+  if (!peer) {
+    // Peer connection for this sender doesn't exist yet -> queue it
+    if (!earlyCandidates.has(from)) earlyCandidates.set(from, []);
+    earlyCandidates.get(from).push(candidate);
     return;
   }
 
   try {
-    await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+    await peer.pc.addIceCandidate(new RTCIceCandidate(candidate));
   } catch (err) {
     console.error('Error adding ICE candidate:', err);
   }
 });
 
-// ---------- rejected / ended by the other side ----------
-socket.on('call_rejected', () => {
-  alert('Call was declined.');
-  resetCallState();
+socket.on('call_peer_left', ({ callId: id, userId }) => {
+  if (id !== callId) return;
+  removePeer(userId);
 });
 
-socket.on('call_ended', () => {
-  resetCallState();
+// The call was cancelled before I ever joined (caller hung up while I was still ringing)
+socket.on('call_cancelled', ({ callId: id }) => {
+  if (pendingIncoming && pendingIncoming.callId === id) {
+    stopRingtone();
+    pendingIncoming = null;
+    incomingCallModal.classList.add('d-none');
+  }
 });
 
-// ---------- end call (local action) ----------
-function endCall(notifyPeer = true) {
-  if (notifyPeer && currentCallPeerId) {
-    socket.emit('end_call', { to: currentCallPeerId });
+socket.on('call_rejected', ({ callId: id }) => {
+  // Informational only for now (e.g. someone declined an "add to call" invite).
+});
+
+// ---------- add someone to an ongoing call ----------
+addToCallBtn?.addEventListener('click', () => {
+  if (!isCallActive) return;
+  openAddToCallModal();
+});
+
+closeAddToCallBtn?.addEventListener('click', () => {
+  addToCallModal.classList.add('d-none');
+});
+
+function openAddToCallModal() {
+  const inCallIds = new Set([...peers.keys(), me._id]);
+  const seen = new Set();
+  const candidates = [];
+
+  (conversationsCache || []).forEach((conv) => {
+    (conv.participants || []).forEach((p) => {
+      if (!p || !p._id) return;
+      if (inCallIds.has(p._id) || seen.has(p._id)) return;
+      seen.add(p._id);
+      candidates.push(p);
+    });
+  });
+
+  addToCallList.innerHTML = '';
+
+  if (candidates.length === 0) {
+    addToCallList.innerHTML = '<div class="call-invite-empty">No one else to add right now.</div>';
+  } else {
+    candidates.forEach((user) => {
+      const row = document.createElement('div');
+      row.className = 'call-invite-row';
+      row.innerHTML = `
+        <img src="${user.profilePicture || ''}" class="avatar" alt="" />
+        <span class="flex-grow-1">${user.name}</span>
+        <button class="call-invite-add-btn"><i class="bi bi-plus-lg"></i></button>
+      `;
+      row.querySelector('.call-invite-add-btn').addEventListener('click', () => {
+        socket.emit('call_invite', { callId, to: user._id });
+        const btn = row.querySelector('.call-invite-add-btn');
+        btn.innerHTML = '<i class="bi bi-check-lg"></i>';
+        btn.disabled = true;
+      });
+      addToCallList.appendChild(row);
+    });
+  }
+
+  addToCallModal.classList.remove('d-none');
+}
+
+// ---------- end / leave call (local action) ----------
+function endCall() {
+  if (callId) {
+    socket.emit('leave_call', { callId });
   }
   resetCallState();
 }
 
-endCallBtn.addEventListener('click', () => endCall(true));
+endCallBtn.addEventListener('click', endCall);
 
 function resetCallState() {
   stopRingtone();
-  clearDisconnectTimer();
 
-  if (peerConnection) {
-    peerConnection.close();
-    peerConnection = null;
-  }
+  peers.forEach((peer) => peer.pc.close());
+  peers.clear();
+  earlyCandidates.clear();
+
   if (localStream) {
     localStream.getTracks().forEach((t) => t.stop());
     localStream = null;
   }
 
-  currentCallPeerId = null;
-  currentCallType = null;
+  callId = null;
+  callType = null;
+  callConversationId = null;
+  isCallActive = false;
   pendingIncoming = null;
-  pendingCandidates = [];
   isMicMuted = false;
   isCameraOff = false;
   toggleMuteBtn.innerHTML = '<i class="bi bi-mic-fill"></i>';
   toggleMuteBtn.classList.remove('call-btn-off');
   toggleCameraBtn.innerHTML = '<i class="bi bi-camera-video-fill"></i>';
   toggleCameraBtn.classList.remove('call-btn-off');
+  callParticipantCount.classList.add('d-none');
 
   hideCallUI();
 }

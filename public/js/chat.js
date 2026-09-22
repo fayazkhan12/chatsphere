@@ -221,16 +221,15 @@ async function openConversation(conv) {
   if (conv.type === 'group') {
     document.getElementById('chatSubtitle').textContent =
       `${conv.participants.length} members`;
-    document.getElementById('voiceCallBtn')?.classList.add('d-none');
-    document.getElementById('videoCallBtn')?.classList.add('d-none');
   } else {
     const other = otherParticipant(conv);
     document.getElementById('chatSubtitle').textContent = other.isOnline
       ? 'Online'
       : `Last seen ${timeAgo(other.lastSeen)}`;
-    document.getElementById('voiceCallBtn')?.classList.remove('d-none');
-    document.getElementById('videoCallBtn')?.classList.remove('d-none');
   }
+  // Calling works for both one-to-one and group conversations now
+  document.getElementById('voiceCallBtn')?.classList.remove('d-none');
+  document.getElementById('videoCallBtn')?.classList.remove('d-none');
 
   socket.emit('join_room', conv._id);
   await loadMessages(conv._id);

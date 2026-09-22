@@ -20,6 +20,38 @@ const removeOnlineUser = (userId, socketId) => {
 
 const isUserOnline = (userId) => onlineUsers.has(String(userId));
 
+// --- Group/1-to-1 call rooms (WebRTC mesh) ---
+// callId is always the conversation's _id: everyone who calls into the same
+// conversation lands in the same room. A room looks like:
+//   {
+//     conversationId,
+//     callType,               // 'audio' | 'video' (set by whoever started it)
+//     participants: Map(userId -> { name, avatar }),  // actually in the call
+//     ringing: Set(userId),   // invited but haven't accepted/declined yet
+//   }
+// Peers connect directly to each other; the server only relays the small
+// WebRTC handshake messages (offer/answer/ICE) between specific peers.
+const activeCalls = new Map();
+
+function removeFromCall(io, room, callId, userId) {
+  const wasParticipant = room.participants.delete(userId);
+  room.ringing.delete(userId);
+
+  if (wasParticipant) {
+    room.participants.forEach((_p, pid) => {
+      io.to(pid).emit('call_peer_left', { callId, userId });
+    });
+  }
+
+  // Nobody actually talking anymore -> stop ringing anyone still invited, clean up
+  if (room.participants.size === 0) {
+    room.ringing.forEach((pid) => {
+      io.to(pid).emit('call_cancelled', { callId });
+    });
+    activeCalls.delete(callId);
+  }
+}
+
 function initSocket(io) {
   // --- Authentication middleware for sockets ---
   // Client must connect with: io(URL, { auth: { token: "<JWT>" } })
@@ -162,33 +194,123 @@ function initSocket(io) {
        // --- join a personal room too, so we can target notifications directly at a user ---
     socket.join(userId);
 
-    // --- voice/video call signaling (WebRTC) ---
-    // The actual audio/video travels directly between the two browsers (peer-to-peer);
-    // the server here only relays the small "handshake" messages needed to set that up.
-    socket.on('call_user', ({ to, offer, callType }) => {
+    // --- voice/video group calling (WebRTC mesh) ---
+    // The actual audio/video always travels directly between browsers
+    // (peer-to-peer); the server only relays small handshake messages and
+    // keeps track of who is currently in which call room.
+
+    // Start OR join the call room for a conversation. The first person to
+    // call this becomes the room's first participant and rings everyone
+    // else in the conversation; anyone who calls it afterwards (accepting
+    // the ring, or opening the same group call independently) just joins
+    // the existing room.
+    socket.on('join_call', async ({ callId, callType, conversationId }) => {
+      try {
+        if (!callId || !conversationId) return;
+
+        let room = activeCalls.get(callId);
+        if (!room) {
+          room = { conversationId, callType, participants: new Map(), ringing: new Set() };
+          activeCalls.set(callId, room);
+        }
+
+        if (room.participants.has(userId)) return; // already in (duplicate tab etc.)
+
+        const existing = [...room.participants.entries()].map(([pid, p]) => ({
+          userId: pid,
+          name: p.name,
+          avatar: p.avatar,
+        }));
+
+        room.participants.set(userId, { name: socket.user.name, avatar: socket.user.profilePicture });
+        room.ringing.delete(userId);
+
+        // Tell the joining client who is already in the room
+        socket.emit('call_joined', { callId, participants: existing });
+
+        // Tell everyone already there that a new peer joined -> each of
+        // them will initiate a WebRTC offer directly to the newcomer.
+        existing.forEach((p) => {
+          io.to(p.userId).emit('call_peer_joined', {
+            callId,
+            userId,
+            name: socket.user.name,
+            avatar: socket.user.profilePicture,
+          });
+        });
+
+        // First person in the room -> ring the rest of the conversation
+        if (existing.length === 0) {
+          const conversation = await Conversation.findById(conversationId).select('participants type');
+          if (conversation) {
+            const targets = conversation.participants.map(String).filter((pid) => pid !== userId);
+            targets.forEach((pid) => {
+              room.ringing.add(pid);
+              io.to(pid).emit('incoming_call', {
+                callId,
+                from: userId,
+                fromName: socket.user.name,
+                fromAvatar: socket.user.profilePicture,
+                callType: room.callType,
+                conversationId,
+                isGroup: conversation.type === 'group',
+              });
+            });
+          }
+        }
+      } catch (err) {
+        console.error('join_call error:', err.message);
+      }
+    });
+
+    // Pull an extra person into an ongoing call, even if they aren't part
+    // of the conversation itself (e.g. adding someone mid 1-to-1 call).
+    socket.on('call_invite', ({ callId, to }) => {
+      const room = activeCalls.get(callId);
+      if (!room || !room.participants.has(userId) || !to) return; // only current participants can invite
+      if (room.participants.has(to) || room.ringing.has(to)) return; // already in / already invited
+
+      room.ringing.add(to);
       io.to(to).emit('incoming_call', {
+        callId,
+        from: userId,
+        fromName: socket.user.name,
+        fromAvatar: socket.user.profilePicture,
+        callType: room.callType,
+        conversationId: room.conversationId,
+        isGroup: true,
+      });
+    });
+
+    socket.on('reject_call', ({ callId, to }) => {
+      const room = activeCalls.get(callId);
+      if (room) room.ringing.delete(userId);
+      if (to) io.to(to).emit('call_rejected', { callId, from: userId });
+    });
+
+    socket.on('leave_call', ({ callId }) => {
+      const room = activeCalls.get(callId);
+      if (!room) return;
+      removeFromCall(io, room, callId, userId);
+    });
+
+    // Generic WebRTC signaling relay, addressed peer-to-peer within a call room
+    socket.on('call_offer', ({ callId, to, offer }) => {
+      io.to(to).emit('call_offer', {
+        callId,
         from: userId,
         fromName: socket.user.name,
         fromAvatar: socket.user.profilePicture,
         offer,
-        callType, // 'audio' | 'video'
       });
     });
 
-    socket.on('answer_call', ({ to, answer }) => {
-      io.to(to).emit('call_answered', { answer });
+    socket.on('call_answer', ({ callId, to, answer }) => {
+      io.to(to).emit('call_answer', { callId, from: userId, answer });
     });
 
-    socket.on('ice_candidate', ({ to, candidate }) => {
-      io.to(to).emit('ice_candidate', { candidate, from: userId });
-    });
-
-    socket.on('reject_call', ({ to }) => {
-      io.to(to).emit('call_rejected');
-    });
-
-    socket.on('end_call', ({ to }) => {
-      io.to(to).emit('call_ended');
+    socket.on('call_ice', ({ callId, to, candidate }) => {
+      io.to(to).emit('call_ice', { callId, from: userId, candidate });
     });
 
     // --- disconnect ---
@@ -201,6 +323,13 @@ function initSocket(io) {
         const lastSeen = new Date();
         await User.findByIdAndUpdate(userId, { isOnline: false, lastSeen });
         socket.broadcast.emit('user_offline', { userId, lastSeen });
+
+        // Remove them from any call room they were in/ringing for
+        activeCalls.forEach((room, callId) => {
+          if (room.participants.has(userId) || room.ringing.has(userId)) {
+            removeFromCall(io, room, callId, userId);
+          }
+        });
       }
     });
   });
