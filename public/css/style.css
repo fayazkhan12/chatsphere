@@ -373,3 +373,213 @@ body {
   gap: 4px;
   border-radius: 0 0 8px 8px;
 }
+
+/* =====================================================
+   VOICE / VIDEO CALL UI
+   ===================================================== */
+
+.avatar-lg {
+  width: 120px;
+  height: 120px;
+  border-radius: 50%;
+  object-fit: cover;
+  background: #3a4a52;
+  border: 3px solid rgba(255, 255, 255, 0.15);
+}
+
+/* ---------- Incoming call popup ---------- */
+.call-incoming {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  background: linear-gradient(160deg, #0b141a 0%, #111b21 60%, #0b141a 100%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  text-align: center;
+}
+
+.call-incoming .avatar-lg {
+  width: 140px;
+  height: 140px;
+  animation: call-ring-pulse 1.6s ease-out infinite;
+}
+
+.call-incoming #incomingCallName {
+  font-size: 1.4rem;
+  margin-top: 22px;
+}
+
+.call-incoming #incomingCallType {
+  font-size: 0.95rem;
+  opacity: 0.75;
+}
+
+@keyframes call-ring-pulse {
+  0% { box-shadow: 0 0 0 0 rgba(0, 168, 132, 0.55); }
+  70% { box-shadow: 0 0 0 26px rgba(0, 168, 132, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(0, 168, 132, 0); }
+}
+
+/* ---------- Active call screen ---------- */
+.call-screen {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  background: #0b141a;
+  overflow: hidden;
+}
+
+.call-screen #remoteVideo {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  background: #0b141a;
+}
+
+.call-screen #localVideo {
+  position: absolute;
+  top: 20px;
+  right: 20px;
+  width: 130px;
+  height: 174px;
+  object-fit: cover;
+  border-radius: 14px;
+  border: 2px solid rgba(255, 255, 255, 0.25);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
+  z-index: 2;
+  background: #202c33;
+}
+
+/* When it's an audio-only call, localVideo has no video track to show,
+   so it just collapses into a slim rounded pill instead of a black box. */
+.call-screen #localVideo:not([srcObject]) {
+  opacity: 0;
+}
+
+.call-status-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  color: #fff;
+  background: radial-gradient(circle at center, rgba(11,20,26,0.4) 0%, rgba(11,20,26,0.85) 100%);
+}
+
+.call-status-overlay .avatar-lg {
+  animation: call-ring-pulse 1.8s ease-out infinite;
+}
+
+.call-status-overlay #callPeerName {
+  font-size: 1.3rem;
+  margin-top: 20px;
+}
+
+.call-status-overlay #callStatusText {
+  font-size: 0.95rem;
+  color: rgba(255, 255, 255, 0.7);
+  margin-top: 4px;
+}
+
+/* ---------- Bottom call controls bar ---------- */
+.call-controls {
+  position: absolute;
+  bottom: 34px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: 22px;
+  padding: 14px 24px;
+  background: rgba(17, 27, 33, 0.55);
+  backdrop-filter: blur(10px);
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+/* ---------- Call buttons (accept / reject / mute / camera) ---------- */
+.call-btn {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  border: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.35rem;
+  cursor: pointer;
+  color: #fff;
+  transition: transform 0.15s ease, background 0.15s ease, filter 0.15s ease;
+}
+
+.call-btn:hover {
+  filter: brightness(1.1);
+  transform: translateY(-2px);
+}
+
+.call-btn:active {
+  transform: translateY(0) scale(0.95);
+}
+
+.call-btn-accept {
+  background: var(--accent);
+  box-shadow: 0 4px 14px rgba(0, 168, 132, 0.5);
+}
+
+.call-btn-reject {
+  background: #e63946;
+  box-shadow: 0 4px 14px rgba(230, 57, 70, 0.5);
+}
+
+.call-btn-secondary {
+  width: 52px;
+  height: 52px;
+  background: rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+}
+
+.call-btn-secondary:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+/* mic-off / camera-off active state */
+.call-btn-off {
+  background: #e63946 !important;
+  border-color: transparent !important;
+}
+
+/* ---------- Small screens ---------- */
+@media (max-width: 480px) {
+  .call-screen #localVideo {
+    width: 96px;
+    height: 128px;
+    top: 14px;
+    right: 14px;
+  }
+
+  .call-controls {
+    gap: 14px;
+    padding: 12px 18px;
+    bottom: 22px;
+  }
+
+  .call-btn {
+    width: 50px;
+    height: 50px;
+    font-size: 1.15rem;
+  }
+
+  .call-btn-secondary {
+    width: 46px;
+    height: 46px;
+  }
+}
