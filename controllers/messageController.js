@@ -42,6 +42,17 @@ const sendMessage = async (req, res, next) => {
       return res.status(400).json({ message: 'conversationId and text are required' });
     }
 
+    const conversation = await Conversation.findById(conversationId);
+    if (!conversation || !conversation.participants.some((p) => String(p) === String(req.user._id))) {
+      return res.status(403).json({ message: 'Not a participant of this conversation' });
+    }
+    if (
+      conversation.status === 'pending' &&
+      String(conversation.requestedBy) !== String(req.user._id)
+    ) {
+      return res.status(403).json({ message: 'Accept this message request before replying' });
+    }
+
     const message = await Message.create({
       conversationId,
       sender: req.user._id,

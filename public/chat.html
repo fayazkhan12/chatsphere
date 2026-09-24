@@ -60,6 +60,15 @@
 
         <div class="typing-indicator d-none" id="typingIndicator"></div>
 
+        <!-- Shown instead of the input when this chat is a pending message request -->
+        <div id="requestBar" class="request-bar d-none">
+          <span id="requestBarText"></span>
+          <div class="request-bar-actions">
+            <button type="button" id="declineRequestBtn" class="btn btn-sm btn-outline-danger">Decline</button>
+            <button type="button" id="acceptRequestBtn" class="btn btn-sm" style="background: var(--accent); color: #fff;">Accept</button>
+          </div>
+        </div>
+
         <form class="message-input" id="messageForm">
           <input type="file" id="fileInput" accept="image/*,.pdf,.docx,.mp3,.mp4" hidden />
           <button type="button" id="attachBtn" title="Attach file"><i class="bi bi-paperclip"></i></button>

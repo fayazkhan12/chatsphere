@@ -104,6 +104,16 @@ function initSocket(io) {
           return callback?.({ error: 'Not a participant of this conversation' });
         }
 
+        // Message-request gate: while a fresh one-to-one chat is still 'pending',
+        // only the original requester may send messages. Whoever was messaged
+        // must accept the request before they can reply.
+        if (
+          conversation.status === 'pending' &&
+          String(conversation.requestedBy) !== userId
+        ) {
+          return callback?.({ error: 'Accept this message request before replying' });
+        }
+
         const message = await Message.create({
           conversationId,
           sender: userId,

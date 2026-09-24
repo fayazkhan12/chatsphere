@@ -87,9 +87,13 @@ const createConversation = async (req, res, next) => {
     const otherUser = await User.findById(userId);
     if (!otherUser) return res.status(404).json({ message: 'User not found' });
 
+    // Brand new one-to-one chat -> starts as a pending message request.
+    // The recipient will need to accept it before they can reply.
     const conversation = await Conversation.create({
       type: 'one-to-one',
       participants: [req.user._id, userId],
+      status: 'pending',
+      requestedBy: req.user._id,
     });
 
     const populated = await conversation.populate('participants', '-password');
@@ -198,6 +202,52 @@ const deleteConversation = async (req, res, next) => {
   }
 };
 
+// @route  PUT /api/conversations/:id/accept
+// The recipient of a pending message request accepts it -> chat becomes normal.
+const acceptRequest = async (req, res, next) => {
+  try {
+    const conversation = await Conversation.findById(req.params.id);
+    if (!conversation) {
+      return res.status(404).json({ message: 'Conversation not found' });
+    }
+    if (!conversation.participants.some((p) => String(p) === String(req.user._id))) {
+      return res.status(403).json({ message: 'Not a participant of this conversation' });
+    }
+    if (String(conversation.requestedBy) === String(req.user._id)) {
+      return res.status(400).json({ message: 'You cannot accept your own request' });
+    }
+
+    conversation.status = 'accepted';
+    await conversation.save();
+
+    const populated = await conversation.populate('participants', '-password');
+    res.json(populated);
+  } catch (error) {
+    next(error);
+  }
+};
+
+// @route  DELETE /api/conversations/:id/decline
+// The recipient declines a pending request -> conversation + its messages are removed.
+const declineRequest = async (req, res, next) => {
+  try {
+    const conversation = await Conversation.findById(req.params.id);
+    if (!conversation) {
+      return res.status(404).json({ message: 'Conversation not found' });
+    }
+    if (!conversation.participants.some((p) => String(p) === String(req.user._id))) {
+      return res.status(403).json({ message: 'Not a participant of this conversation' });
+    }
+
+    await Message.deleteMany({ conversationId: conversation._id });
+    await conversation.deleteOne();
+
+    res.json({ message: 'Request declined', conversationId: conversation._id });
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   getConversations,
   createConversation,
@@ -205,4 +255,6 @@ module.exports = {
   removeMember,
   leaveGroup,
   deleteConversation,
-}
+  acceptRequest,
+  declineRequest,
+};

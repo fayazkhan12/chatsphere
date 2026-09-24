@@ -98,11 +98,14 @@ function renderChatList() {
           : conv.lastMessage.text || '')
       : 'No messages yet';
 
+    const isPendingForMe = conv.status === 'pending' && String(conv.requestedBy) !== String(me._id);
+    const isPendingFromMe = conv.status === 'pending' && String(conv.requestedBy) === String(me._id);
+
     div.innerHTML = `
       <img class="avatar" src="${conversationAvatar(conv)}" />
       <div class="chat-item-info">
-        <div class="chat-item-name">${conversationTitle(conv)}</div>
-        <div class="chat-item-last">${lastMsgText}</div>
+        <div class="chat-item-name">${conversationTitle(conv)} ${isPendingForMe ? '<span class="request-tag">Request</span>' : ''}</div>
+        <div class="chat-item-last">${isPendingFromMe ? 'Message request sent' : lastMsgText}</div>
       </div>
       <div class="chat-item-meta">
         ${conv.lastMessage ? formatTime(conv.lastMessage.createdAt) : ''}
@@ -231,6 +234,8 @@ async function openConversation(conv) {
   document.getElementById('voiceCallBtn')?.classList.remove('d-none');
   document.getElementById('videoCallBtn')?.classList.remove('d-none');
 
+  updateRequestBar(conv);
+
   socket.emit('join_room', conv._id);
   await loadMessages(conv._id);
 
@@ -243,6 +248,59 @@ async function openConversation(conv) {
   // entirely and landing back on the login page.
   history.pushState({ chatOpen: true }, '', location.pathname);
 }
+
+// Shows the Accept/Decline bar (hiding the normal input) when this chat is a
+// pending request addressed TO me. If I'm the one who sent the request, or
+// it's already accepted / a group chat, the normal input stays visible.
+function updateRequestBar(conv) {
+  const requestBar = document.getElementById('requestBar');
+  const requestBarText = document.getElementById('requestBarText');
+  const isPendingForMe =
+    conv.type === 'one-to-one' &&
+    conv.status === 'pending' &&
+    String(conv.requestedBy) !== String(me._id);
+
+  if (isPendingForMe) {
+    requestBar.classList.remove('d-none');
+    messageForm.classList.add('d-none');
+    requestBarText.textContent = `${conversationTitle(conv)} sent you a message request`;
+  } else {
+    requestBar.classList.add('d-none');
+    messageForm.classList.remove('d-none');
+  }
+}
+
+document.getElementById('acceptRequestBtn').addEventListener('click', async () => {
+  if (!activeConversation) return;
+  const res = await fetch(`${API_BASE}/conversations/${activeConversation._id}/accept`, {
+    method: 'PUT',
+    headers: authHeaders(),
+  });
+  if (!res.ok) return alert('Could not accept request. Try again.');
+
+  const updated = await res.json();
+  activeConversation = updated;
+  const idx = conversationsCache.findIndex((c) => c._id === updated._id);
+  if (idx !== -1) conversationsCache[idx] = updated;
+
+  updateRequestBar(updated);
+  renderChatList();
+});
+
+document.getElementById('declineRequestBtn').addEventListener('click', async () => {
+  if (!activeConversation) return;
+  const confirmed = confirm('Decline this message request? The chat will be removed.');
+  if (!confirmed) return;
+
+  const res = await fetch(`${API_BASE}/conversations/${activeConversation._id}/decline`, {
+    method: 'DELETE',
+    headers: authHeaders(),
+  });
+  if (!res.ok) return alert('Could not decline request. Try again.');
+
+  conversationsCache = conversationsCache.filter((c) => c._id !== activeConversation._id);
+  closeActiveConversation();
+});
 
 function closeActiveConversation() {
   activeConversation = null;
