@@ -40,6 +40,15 @@ function conversationAvatar(conv) {
   return other ? other.profilePicture : '';
 }
 
+// True if this conversation is a pending request/invite that I (not the
+// other side) still need to accept or decline.
+function isPendingRequestForMe(conv) {
+  if (conv.type === 'group') {
+    return (conv.pendingMembers || []).some((p) => String(p._id || p) === String(me._id));
+  }
+  return conv.status === 'pending' && String(conv.requestedBy) !== String(me._id);
+}
+
 // ---------- init ----------
 document.getElementById('myAvatar').src = me.profilePicture || '';
 document.getElementById('myName').textContent = me.name || '';
@@ -98,14 +107,23 @@ function renderChatList() {
           : conv.lastMessage.text || '')
       : 'No messages yet';
 
-    const isPendingForMe = conv.status === 'pending' && String(conv.requestedBy) !== String(me._id);
-    const isPendingFromMe = conv.status === 'pending' && String(conv.requestedBy) === String(me._id);
+    const isPendingForMe = isPendingRequestForMe(conv);
+    const isPendingFromMe =
+      conv.type === 'one-to-one' &&
+      conv.status === 'pending' &&
+      String(conv.requestedBy) === String(me._id);
+    const isGroupInviteSent =
+      conv.type === 'group' && (conv.pendingMembers || []).length > 0 && !isPendingForMe;
+
+    let lastLineText = lastMsgText;
+    if (isPendingFromMe) lastLineText = 'Message request sent';
+    else if (isPendingForMe && conv.type === 'group') lastLineText = 'You were invited to this group';
 
     div.innerHTML = `
       <img class="avatar" src="${conversationAvatar(conv)}" />
       <div class="chat-item-info">
-        <div class="chat-item-name">${conversationTitle(conv)} ${isPendingForMe ? '<span class="request-tag">Request</span>' : ''}</div>
-        <div class="chat-item-last">${isPendingFromMe ? 'Message request sent' : lastMsgText}</div>
+        <div class="chat-item-name">${conversationTitle(conv)} ${isPendingForMe ? `<span class="request-tag">${conv.type === 'group' ? 'Invite' : 'Request'}</span>` : ''}</div>
+        <div class="chat-item-last">${lastLineText}</div>
       </div>
       <div class="chat-item-meta">
         ${conv.lastMessage ? formatTime(conv.lastMessage.createdAt) : ''}
@@ -221,23 +239,38 @@ async function openConversation(conv) {
   document.getElementById('chatAvatar').src = conversationAvatar(conv);
   document.getElementById('chatTitle').textContent = conversationTitle(conv);
 
+  // A group invite I haven't accepted yet: I'm not a real participant server-side,
+  // so don't try to join the room or load messages (that would just 403).
+  const iAmPendingGroupInvite = conv.type === 'group' && isPendingRequestForMe(conv);
+
   if (conv.type === 'group') {
-    document.getElementById('chatSubtitle').textContent =
-      `${conv.participants.length} members`;
+    document.getElementById('chatSubtitle').textContent = iAmPendingGroupInvite
+      ? 'You were invited to this group'
+      : `${conv.participants.length} members`;
   } else {
     const other = otherParticipant(conv);
     document.getElementById('chatSubtitle').textContent = other.isOnline
       ? 'Online'
       : `Last seen ${timeAgo(other.lastSeen)}`;
   }
-  // Calling works for both one-to-one and group conversations now
-  document.getElementById('voiceCallBtn')?.classList.remove('d-none');
-  document.getElementById('videoCallBtn')?.classList.remove('d-none');
+  // Calling works for both one-to-one and group conversations now, but not
+  // before I've actually joined a group I was only invited to.
+  if (iAmPendingGroupInvite) {
+    document.getElementById('voiceCallBtn')?.classList.add('d-none');
+    document.getElementById('videoCallBtn')?.classList.add('d-none');
+  } else {
+    document.getElementById('voiceCallBtn')?.classList.remove('d-none');
+    document.getElementById('videoCallBtn')?.classList.remove('d-none');
+  }
 
   updateRequestBar(conv);
 
-  socket.emit('join_room', conv._id);
-  await loadMessages(conv._id);
+  if (iAmPendingGroupInvite) {
+    document.getElementById('messagesContainer').innerHTML = '';
+  } else {
+    socket.emit('join_room', conv._id);
+    await loadMessages(conv._id);
+  }
 
   // messages just got marked read -> reflect that immediately in the sidebar
   conv.unreadCount = 0;
@@ -255,15 +288,15 @@ async function openConversation(conv) {
 function updateRequestBar(conv) {
   const requestBar = document.getElementById('requestBar');
   const requestBarText = document.getElementById('requestBarText');
-  const isPendingForMe =
-    conv.type === 'one-to-one' &&
-    conv.status === 'pending' &&
-    String(conv.requestedBy) !== String(me._id);
+  const isPendingForMe = isPendingRequestForMe(conv);
 
   if (isPendingForMe) {
     requestBar.classList.remove('d-none');
     messageForm.classList.add('d-none');
-    requestBarText.textContent = `${conversationTitle(conv)} sent you a message request`;
+    requestBarText.textContent =
+      conv.type === 'group'
+        ? `You've been invited to join "${conversationTitle(conv)}"`
+        : `${conversationTitle(conv)} sent you a message request`;
   } else {
     requestBar.classList.add('d-none');
     messageForm.classList.remove('d-none');
@@ -279,24 +312,26 @@ document.getElementById('acceptRequestBtn').addEventListener('click', async () =
   if (!res.ok) return alert('Could not accept request. Try again.');
 
   const updated = await res.json();
-  activeConversation = updated;
-  const idx = conversationsCache.findIndex((c) => c._id === updated._id);
-  if (idx !== -1) conversationsCache[idx] = updated;
-
-  updateRequestBar(updated);
-  renderChatList();
+  await loadConversations();
+  const fresh = conversationsCache.find((c) => c._id === updated._id) || updated;
+  openConversation(fresh); // re-open properly now that I'm an actual participant (joins room, loads messages)
 });
 
 document.getElementById('declineRequestBtn').addEventListener('click', async () => {
   if (!activeConversation) return;
-  const confirmed = confirm('Decline this message request? The chat will be removed.');
+  const isGroup = activeConversation.type === 'group';
+  const confirmed = confirm(
+    isGroup
+      ? 'Decline this group invite?'
+      : 'Decline this message request? The chat will be removed.'
+  );
   if (!confirmed) return;
 
   const res = await fetch(`${API_BASE}/conversations/${activeConversation._id}/decline`, {
     method: 'DELETE',
     headers: authHeaders(),
   });
-  if (!res.ok) return alert('Could not decline request. Try again.');
+  if (!res.ok) return alert('Could not decline. Try again.');
 
   conversationsCache = conversationsCache.filter((c) => c._id !== activeConversation._id);
   closeActiveConversation();

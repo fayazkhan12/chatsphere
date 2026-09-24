@@ -8,10 +8,11 @@ const User = require('../models/User');
 const getConversations = async (req, res, next) => {
   try {
     const conversations = await Conversation.find({
-      participants: req.user._id,
+      $or: [{ participants: req.user._id }, { pendingMembers: req.user._id }],
       deletedFor: { $ne: req.user._id }, // hide chats this user has deleted
     })
       .populate('participants', '-password')
+      .populate('pendingMembers', '-password')
       .populate('groupAdmin', '-password')
       .populate({
         path: 'lastMessage',
@@ -40,7 +41,10 @@ const getConversations = async (req, res, next) => {
 
     const result = conversations.map((c) => {
       const obj = c.toObject();
-      obj.unreadCount = unreadMap[String(c._id)] || 0;
+      // Someone only invited (not yet an accepted participant) can't read
+      // messages yet, so they shouldn't see an unread badge either.
+      const iAmParticipant = c.participants.some((p) => String(p._id) === String(req.user._id));
+      obj.unreadCount = iAmParticipant ? unreadMap[String(c._id)] || 0 : 0;
       return obj;
     });
 
@@ -63,14 +67,19 @@ const createConversation = async (req, res, next) => {
           .json({ message: 'Group needs a name and at least 2 other members' });
       }
 
+      // Only the creator joins immediately; everyone else is invited and
+      // must accept before they can see/send messages in the group.
       const group = await Conversation.create({
         type: 'group',
         groupName,
         groupAdmin: req.user._id,
-        participants: [req.user._id, ...members],
+        participants: [req.user._id],
+        pendingMembers: members,
       });
 
-      const populated = await group.populate('participants', '-password');
+      const populated = await (
+        await group.populate('participants', '-password')
+      ).populate('pendingMembers', '-password');
       return res.status(201).json(populated);
     }
 
@@ -116,12 +125,18 @@ const addMember = async (req, res, next) => {
       return res.status(403).json({ message: 'Only group admin can add members' });
     }
 
-    if (!group.participants.includes(memberId)) {
-      group.participants.push(memberId);
+    const alreadyIn =
+      group.participants.some((p) => String(p) === String(memberId)) ||
+      group.pendingMembers.some((p) => String(p) === String(memberId));
+
+    if (!alreadyIn) {
+      group.pendingMembers.push(memberId);
       await group.save();
     }
 
-    const populated = await group.populate('participants', '-password');
+    const populated = await (
+      await group.populate('participants', '-password')
+    ).populate('pendingMembers', '-password');
     res.json(populated);
   } catch (error) {
     next(error);
@@ -144,9 +159,14 @@ const removeMember = async (req, res, next) => {
     group.participants = group.participants.filter(
       (p) => String(p) !== String(memberId)
     );
+    group.pendingMembers = group.pendingMembers.filter(
+      (p) => String(p) !== String(memberId)
+    );
     await group.save();
 
-    const populated = await group.populate('participants', '-password');
+    const populated = await (
+      await group.populate('participants', '-password')
+    ).populate('pendingMembers', '-password');
     res.json(populated);
   } catch (error) {
     next(error);
@@ -203,24 +223,43 @@ const deleteConversation = async (req, res, next) => {
 };
 
 // @route  PUT /api/conversations/:id/accept
-// The recipient of a pending message request accepts it -> chat becomes normal.
+// 1-to-1: the recipient of a pending message request accepts it.
+// group: someone who was invited (pendingMembers) accepts and becomes a real participant.
 const acceptRequest = async (req, res, next) => {
   try {
     const conversation = await Conversation.findById(req.params.id);
     if (!conversation) {
       return res.status(404).json({ message: 'Conversation not found' });
     }
-    if (!conversation.participants.some((p) => String(p) === String(req.user._id))) {
-      return res.status(403).json({ message: 'Not a participant of this conversation' });
-    }
-    if (String(conversation.requestedBy) === String(req.user._id)) {
-      return res.status(400).json({ message: 'You cannot accept your own request' });
+
+    if (conversation.type === 'group') {
+      const isInvited = conversation.pendingMembers.some(
+        (p) => String(p) === String(req.user._id)
+      );
+      if (!isInvited) {
+        return res.status(403).json({ message: 'No pending invite for you in this group' });
+      }
+
+      conversation.pendingMembers = conversation.pendingMembers.filter(
+        (p) => String(p) !== String(req.user._id)
+      );
+      conversation.participants.push(req.user._id);
+      await conversation.save();
+    } else {
+      if (!conversation.participants.some((p) => String(p) === String(req.user._id))) {
+        return res.status(403).json({ message: 'Not a participant of this conversation' });
+      }
+      if (String(conversation.requestedBy) === String(req.user._id)) {
+        return res.status(400).json({ message: 'You cannot accept your own request' });
+      }
+
+      conversation.status = 'accepted';
+      await conversation.save();
     }
 
-    conversation.status = 'accepted';
-    await conversation.save();
-
-    const populated = await conversation.populate('participants', '-password');
+    const populated = await (
+      await conversation.populate('participants', '-password')
+    ).populate('pendingMembers', '-password');
     res.json(populated);
   } catch (error) {
     next(error);
@@ -228,13 +267,31 @@ const acceptRequest = async (req, res, next) => {
 };
 
 // @route  DELETE /api/conversations/:id/decline
-// The recipient declines a pending request -> conversation + its messages are removed.
+// 1-to-1: the recipient declines -> whole conversation + its messages are removed.
+// group: the invited person declines -> they're just removed from pendingMembers;
+//        the group itself keeps existing for everyone else.
 const declineRequest = async (req, res, next) => {
   try {
     const conversation = await Conversation.findById(req.params.id);
     if (!conversation) {
       return res.status(404).json({ message: 'Conversation not found' });
     }
+
+    if (conversation.type === 'group') {
+      const isInvited = conversation.pendingMembers.some(
+        (p) => String(p) === String(req.user._id)
+      );
+      if (!isInvited) {
+        return res.status(403).json({ message: 'No pending invite for you in this group' });
+      }
+
+      conversation.pendingMembers = conversation.pendingMembers.filter(
+        (p) => String(p) !== String(req.user._id)
+      );
+      await conversation.save();
+      return res.json({ message: 'Invite declined', conversationId: conversation._id });
+    }
+
     if (!conversation.participants.some((p) => String(p) === String(req.user._id))) {
       return res.status(403).json({ message: 'Not a participant of this conversation' });
     }

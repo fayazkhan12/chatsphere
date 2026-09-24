@@ -24,6 +24,11 @@ const conversationSchema = new mongoose.Schema(
     // while it's pending. Group chats are always 'accepted' (no request flow).
     status: { type: String, enum: ['pending', 'accepted'], default: 'accepted' },
     requestedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+
+    // Group invite flow: someone added to a group sits in 'pendingMembers'
+    // (they can see the invite but not the group's chat yet) until they
+    // accept, at which point they move into 'participants'.
+    pendingMembers: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
   },
   { timestamps: true }
 );
