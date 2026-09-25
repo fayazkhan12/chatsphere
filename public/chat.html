@@ -30,7 +30,7 @@
 
       <div class="search-box">
         <i class="bi bi-search"></i>
-        <input type="text" id="searchInput" placeholder="Search users..." />
+        <input type="text" id="searchInput" placeholder="Enter exact username to chat..." />
       </div>
 
       <div id="searchResults" class="search-results d-none"></div>
@@ -54,20 +54,13 @@
           </div>
           <button type="button" id="voiceCallBtn" class="icon-btn" title="Voice call"><i class="bi bi-telephone-fill"></i></button>
           <button type="button" id="videoCallBtn" class="icon-btn" title="Video call"><i class="bi bi-camera-video-fill"></i></button>
+          <button type="button" id="groupVoiceCallBtn" class="icon-btn d-none" title="Group voice call"><i class="bi bi-telephone-fill"></i></button>
+          <button type="button" id="groupVideoCallBtn" class="icon-btn d-none" title="Group video call"><i class="bi bi-camera-video-fill"></i></button>
         </div>
 
         <div class="messages" id="messagesContainer"></div>
 
         <div class="typing-indicator d-none" id="typingIndicator"></div>
-
-        <!-- Shown instead of the input when this chat is a pending message request -->
-        <div id="requestBar" class="request-bar d-none">
-          <span id="requestBarText"></span>
-          <div class="request-bar-actions">
-            <button type="button" id="declineRequestBtn" class="btn btn-sm btn-outline-danger">Decline</button>
-            <button type="button" id="acceptRequestBtn" class="btn btn-sm" style="background: var(--accent); color: #fff;">Accept</button>
-          </div>
-        </div>
 
         <form class="message-input" id="messageForm">
           <input type="file" id="fileInput" accept="image/*,.pdf,.docx,.mp3,.mp4" hidden />
@@ -101,11 +94,26 @@
     </div>
   </div>
 
+  <!-- Add participant to an active group call -->
+  <div class="modal fade" id="groupAddParticipantModal" tabindex="-1">
+    <div class="modal-dialog">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title">Add to call</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <div id="groupAddParticipantList"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <audio id="notifSound" src="https://cdn.jsdelivr.net/gh/naptha/notification-sounds@master/notify.mp3" preload="auto"></audio>
 
   <div id="toastContainer" class="toast-container"></div>
 
-  <!-- Incoming call popup -->
+  <!-- Incoming 1-to-1 call popup -->
   <div id="incomingCallModal" class="call-incoming d-none">
     <img id="incomingCallAvatar" class="avatar-lg" src="" alt="" />
     <div id="incomingCallName" class="fw-bold fs-5 mt-2"></div>
@@ -116,10 +124,9 @@
     </div>
   </div>
 
-  <!-- Active call screen -->
+  <!-- Active 1-to-1 call screen -->
   <div id="callScreen" class="call-screen d-none">
-    <!-- remote participant tiles get added/removed here dynamically -->
-    <div id="callGrid" class="call-grid"></div>
+    <video id="remoteVideo" autoplay playsinline></video>
     <video id="localVideo" autoplay playsinline muted></video>
 
     <div id="callStatusOverlay" class="call-status-overlay">
@@ -128,26 +135,33 @@
       <div id="callStatusText" class="text-muted"></div>
     </div>
 
-    <div id="callParticipantCount" class="call-participant-count d-none">
-      <i class="bi bi-people-fill"></i> <span id="callParticipantCountText"></span>
-    </div>
-
     <div class="call-controls">
       <button id="toggleMuteBtn" class="call-btn call-btn-secondary"><i class="bi bi-mic-fill"></i></button>
       <button id="toggleCameraBtn" class="call-btn call-btn-secondary"><i class="bi bi-camera-video-fill"></i></button>
-      <button id="addToCallBtn" class="call-btn call-btn-secondary" title="Add to call"><i class="bi bi-person-plus-fill"></i></button>
       <button id="endCallBtn" class="call-btn call-btn-reject"><i class="bi bi-telephone-x-fill"></i></button>
     </div>
   </div>
 
-  <!-- Add-participant picker, opened from the call screen -->
-  <div id="addToCallModal" class="call-invite-overlay d-none">
-    <div class="call-invite-box">
-      <div class="call-invite-header">
-        <span>Add to call</span>
-        <button id="closeAddToCallBtn" class="icon-btn"><i class="bi bi-x-lg"></i></button>
-      </div>
-      <div id="addToCallList" class="call-invite-list"></div>
+  <!-- Incoming GROUP call popup -->
+  <div id="groupIncomingCallModal" class="call-incoming d-none">
+    <img id="groupIncomingCallAvatar" class="avatar-lg" src="" alt="" />
+    <div id="groupIncomingCallName" class="fw-bold fs-5 mt-2"></div>
+    <div id="groupIncomingCallType" class="text-muted mb-3"></div>
+    <div class="d-flex gap-3">
+      <button id="groupRejectCallBtn" class="call-btn call-btn-reject"><i class="bi bi-telephone-x-fill"></i></button>
+      <button id="groupAcceptCallBtn" class="call-btn call-btn-accept"><i class="bi bi-telephone-fill"></i></button>
+    </div>
+  </div>
+
+  <!-- Active GROUP call screen -->
+  <div id="groupCallScreen" class="call-screen d-none">
+    <div id="groupCallGrid" class="group-call-grid"></div>
+
+    <div class="call-controls">
+      <button id="groupToggleMuteBtn" class="call-btn call-btn-secondary"><i class="bi bi-mic-fill"></i></button>
+      <button id="groupToggleCameraBtn" class="call-btn call-btn-secondary"><i class="bi bi-camera-video-fill"></i></button>
+      <button id="groupAddParticipantBtn" class="call-btn call-btn-secondary"><i class="bi bi-person-plus-fill"></i></button>
+      <button id="groupLeaveCallBtn" class="call-btn call-btn-reject"><i class="bi bi-telephone-x-fill"></i></button>
     </div>
   </div>
 
@@ -158,5 +172,6 @@
   <script src="js/socket.js"></script>
   <script src="js/chat.js"></script>
   <script src="js/call.js"></script>
+  <script src="js/groupcall.js"></script>
 </body>
 </html>

@@ -242,16 +242,22 @@ async function openConversation(conv) {
   // A group invite I haven't accepted yet: I'm not a real participant server-side,
   // so don't try to join the room or load messages (that would just 403).
   const iAmPendingGroupInvite = conv.type === 'group' && isPendingRequestForMe(conv);
-
   if (conv.type === 'group') {
-    document.getElementById('chatSubtitle').textContent = iAmPendingGroupInvite
-      ? 'You were invited to this group'
-      : `${conv.participants.length} members`;
+    document.getElementById('chatSubtitle').textContent =
+      `${conv.participants.length} members`;
+    document.getElementById('voiceCallBtn')?.classList.add('d-none');
+    document.getElementById('videoCallBtn')?.classList.add('d-none');
+    document.getElementById('groupVoiceCallBtn')?.classList.remove('d-none');
+    document.getElementById('groupVideoCallBtn')?.classList.remove('d-none');
   } else {
     const other = otherParticipant(conv);
     document.getElementById('chatSubtitle').textContent = other.isOnline
       ? 'Online'
       : `Last seen ${timeAgo(other.lastSeen)}`;
+    document.getElementById('voiceCallBtn')?.classList.remove('d-none');
+    document.getElementById('videoCallBtn')?.classList.remove('d-none');
+    document.getElementById('groupVoiceCallBtn')?.classList.add('d-none');
+    document.getElementById('groupVideoCallBtn')?.classList.add('d-none');
   }
   // Calling works for both one-to-one and group conversations now, but not
   // before I've actually joined a group I was only invited to.
