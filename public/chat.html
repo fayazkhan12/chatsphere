@@ -62,6 +62,14 @@
 
         <div class="typing-indicator d-none" id="typingIndicator"></div>
 
+        <div id="requestBar" class="request-bar d-none">
+          <div id="requestBarText" class="request-bar-text"></div>
+          <div class="request-bar-actions">
+            <button id="declineRequestBtn" class="btn btn-outline-danger btn-sm">Decline</button>
+            <button id="acceptRequestBtn" class="btn btn-success btn-sm">Accept</button>
+          </div>
+        </div>
+
         <form class="message-input" id="messageForm">
           <input type="file" id="fileInput" accept="image/*,.pdf,.docx,.mp3,.mp4" hidden />
           <button type="button" id="attachBtn" title="Attach file"><i class="bi bi-paperclip"></i></button>

@@ -777,3 +777,35 @@ body {
   padding: 2px 8px;
   border-radius: 6px;
 }
+
+
+
+.request-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+  background: var(--bubble-theirs, #fff);
+  border-top: 1px solid rgba(0,0,0,0.08);
+}
+.request-bar-text {
+  font-size: 0.85rem;
+  color: var(--muted, #667781);
+}
+.request-bar-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.request-tag {
+  display: inline-block;
+  background: #25d366;
+  color: white;
+  font-size: 0.65rem;
+  font-weight: 700;
+  padding: 1px 8px;
+  border-radius: 10px;
+  margin-left: 6px;
+  vertical-align: middle;
+}
